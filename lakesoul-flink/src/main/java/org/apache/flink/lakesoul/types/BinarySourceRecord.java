@@ -19,6 +19,11 @@
 
 package org.apache.flink.lakesoul.types;
 
+import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.core.json.JsonReadFeature;
+import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.databind.JsonNode;
+import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.databind.ObjectMapper;
+import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.databind.node.ObjectNode;
+import com.ververica.cdc.connectors.shaded.org.apache.kafka.common.serialization.Deserializer;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Field;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Schema;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.SchemaAndValue;
@@ -27,9 +32,14 @@ import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.source.Sourc
 import io.debezium.data.Envelope;
 import org.apache.commons.lang.StringUtils;
 import org.apache.flink.core.fs.Path;
+import org.apache.flink.lakesoul.tool.JacksonMapperFactory;
+import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.VarCharType;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 
 import static com.ververica.cdc.connectors.mysql.source.utils.RecordUtils.SCHEMA_CHANGE_EVENT_KEY_NAME;
@@ -81,46 +91,6 @@ public class BinarySourceRecord {
         this.isDDLRecord = isDDL;
     }
 
-    public static BinarySourceRecord fromKafkaSourceRecord(SourceRecord sourceRecord,
-                                                           LakeSoulRecordConvert convert) throws Exception {
-        Schema keySchema = sourceRecord.keySchema();
-        TableId tableId = new TableId(io.debezium.relational.TableId.parse(sourceRecord.topic()).toLowercase());
-        boolean isDDL = SCHEMA_CHANGE_EVENT_KEY_NAME.equalsIgnoreCase(keySchema.name());
-        if (isDDL) {
-            return new BinarySourceRecord(sourceRecord.topic(), null,
-                    Collections.emptyList(), null, SourceRecordJsonSerde.getInstance().serializeValue(sourceRecord),
-                    tableId,
-                    true);
-        } else {
-            List<String> primaryKeys = new ArrayList<>();
-            keySchema.fields().forEach(f -> primaryKeys.add(f.name()));
-            Schema valueSchema = sourceRecord.valueSchema();
-            Struct value = (Struct) sourceRecord.value();
-
-            // retrieve source event time if exist and non-zero
-            Field sourceField = valueSchema.field(Envelope.FieldName.SOURCE);
-            long binlogFileIndex = 0;
-            long binlogPosition = 0;
-            Struct source = value.getStruct(Envelope.FieldName.SOURCE);
-            if (sourceField != null && source != null ) {
-                if (sourceField.schema().field("file") != null) {
-                    String fileName = (String)source.getWithoutDefault("file");
-                    if (StringUtils.isNotBlank(fileName)) {
-                        binlogFileIndex = Long.parseLong(fileName.substring(fileName.lastIndexOf(".") + 1));
-                    }
-                }
-                if (sourceField.schema().field("pos") != null) {
-                    binlogPosition = (Long) source.getWithoutDefault("pos");
-                }
-
-            }
-            LakeSoulRowDataWrapper data = convert.toLakeSoulDataType(valueSchema, value, tableId, 1l);
-
-            return new BinarySourceRecord(sourceRecord.topic(), primaryKeys, Collections.emptyList(), data, null,
-                    tableId, false);
-        }
-    }
-
     public static BinarySourceRecord fromMysqlSourceRecord(SourceRecord sourceRecord,
                                                            LakeSoulRecordConvert convert,
                                                            String basePath) throws Exception {
@@ -159,6 +129,53 @@ public class BinarySourceRecord {
             return new BinarySourceRecord(sourceRecord.topic(), primaryKeys, tableId, tablePath,
                     Collections.emptyList(), false, data, null);
         }
+    }
+
+    public static BinarySourceRecord fromKafkaSourceRecord(ConsumerRecord consumerRecord,
+                                                           LakeSoulRecordConvert convert,
+                                                           String basePath,
+                                                           ObjectMapper objectMapper) throws Exception {
+
+        String topic = consumerRecord.topic();
+        int partition = consumerRecord.partition();
+        long offset = consumerRecord.offset();
+
+        JsonNode keyNode = objectMapper.readTree((byte[])consumerRecord.key());
+        JsonNode valueNode = objectMapper.readTree((byte[]) consumerRecord.value());
+
+        List<String> keyList = new ArrayList<>();
+//        JsonNode primaryKeys = keyNode.get("primary_keys");
+//        if (primaryKeys.isArray()) {
+//            Iterator<JsonNode> elements = primaryKeys.elements();
+//            while (elements.hasNext()){
+//                keyList.add(elements.next().asText());
+//            }
+//        }
+        JsonNode pkValue = keyNode.get("pk_value");
+        Iterator<String> pkIterator = pkValue.fieldNames();
+        while (pkIterator.hasNext()) {
+            String keyName = pkIterator.next();
+            keyList.add(keyName);
+        }
+
+        JsonNode source = valueNode.get("source");
+        String databaseName = source.get("schema").asText();
+        String tableName = source.get("table").asText();
+        TableId tableId = new TableId("lakesoul", databaseName, tableName);
+
+        String opType = valueNode.get("op").asText();
+        JsonNode before = valueNode.get("before");
+        String beforeTypeStr = valueNode.get("before_field_type").asText();
+        JsonNode after = valueNode.get("after");
+        String afterTypeStr = valueNode.get("after_field_type").asText();
+
+        long sortField = offset;
+
+        LakeSoulRowDataWrapper data = convert.kafkaToLakeSoulDataType(before, beforeTypeStr, after, afterTypeStr, opType, tableId, sortField);
+        String tablePath = new Path(new Path(basePath, tableId.schema()), tableId.table()).toString();
+
+        return new BinarySourceRecord(tableId.toString(), keyList, tableId, tablePath,
+                Collections.emptyList(), false, data, null);
     }
 
     public String getTopic() {

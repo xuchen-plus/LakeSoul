@@ -19,7 +19,9 @@
 
 package org.apache.flink.lakesoul.types;
 
+import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.databind.JsonNode;
 import com.alibaba.fastjson.JSONObject;
+import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Decimal;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Field;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Schema;
@@ -43,6 +45,7 @@ import io.debezium.time.Timestamp;
 import io.debezium.time.Year;
 import io.debezium.time.ZonedTime;
 import io.debezium.time.ZonedTimestamp;
+import org.apache.flink.formats.json.JsonToRowDataConverters;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.lakesoul.tool.FlinkUtil;
 import org.apache.flink.lakesoul.tool.LakeSoulKeyGen;
@@ -51,6 +54,8 @@ import org.apache.flink.table.data.binary.BinaryRowData;
 import org.apache.flink.table.data.writer.BinaryRowWriter;
 import org.apache.flink.table.types.logical.*;
 import org.apache.flink.types.RowKind;
+import org.apache.spark.sql.types.DatetimeType;
+import org.apache.spark.sql.types.TimestampNTZType;
 
 import java.io.Serializable;
 import java.math.BigDecimal;
@@ -59,18 +64,20 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 
+import static org.apache.flink.formats.common.TimestampFormat.SQL;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.CDC_CHANGE_COLUMN;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.CDC_CHANGE_COLUMN_DEFAULT;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.SORT_FIELD;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.USE_CDC;
 
+import static org.apache.flink.formats.common.TimestampFormat.ISO_8601;
+
 public class LakeSoulRecordConvert implements Serializable {
+
     private final ZoneId serverTimeZone;
+
     private final String cdcColumn;
 
     final boolean useCDC;
@@ -78,6 +85,8 @@ public class LakeSoulRecordConvert implements Serializable {
     List<String> partitionFields;
 
     private final JSONObject properties;
+
+    JsonToRowDataConverters converter = new JsonToRowDataConverters(true, false, SQL);
 
     public LakeSoulRecordConvert(Configuration conf, String serverTimeZone) {
         this(conf, serverTimeZone, Collections.emptyList());
@@ -200,8 +209,6 @@ public class LakeSoulRecordConvert implements Serializable {
             colNames[i] = item.name();
             colTypes[i] = convertToLogical(item.schema());
         }
-//        colNames[useCDC ? arity - 3 : arity - 2] = BINLOG_FILE_INDEX;
-//        colTypes[useCDC ? arity - 3 : arity - 2] = new BigIntType();
         colNames[useCDC ? arity - 2 : arity - 1] = SORT_FIELD;
         colTypes[useCDC ? arity - 2 : arity - 1] = new BigIntType();
         if (useCDC) {
@@ -671,4 +678,179 @@ public class LakeSoulRecordConvert implements Serializable {
                     "Unsupported BYTES value type: " + dbzObj.getClass().getSimpleName());
         }
     }
+
+    public LakeSoulRowDataWrapper kafkaToLakeSoulDataType(JsonNode beforeJsonNode, String beforeTypeStr, JsonNode afterJsonNode, String afterTypeStr, String opType, TableId tableId, long sortField) throws Exception {
+        LakeSoulRowDataWrapper.Builder builder = LakeSoulRowDataWrapper.newBuilder().setTableId(tableId);
+        String op = getOPType(opType);
+
+        if (op.equals("insert")) {
+            ((ObjectNode) afterJsonNode).put(SORT_FIELD, sortField);
+            if (useCDC) {
+                ((ObjectNode) afterJsonNode).put(cdcColumn, "insert");
+            }
+        } else if (op.equals("delete")) {
+            ((ObjectNode) beforeJsonNode).put(SORT_FIELD, sortField);
+            if (useCDC) {
+                ((ObjectNode) beforeJsonNode).put(cdcColumn, "delete");
+            }
+        } else {
+            ((ObjectNode) afterJsonNode).put(SORT_FIELD, sortField);
+            ((ObjectNode) beforeJsonNode).put(SORT_FIELD, sortField);
+            if (useCDC) {
+                ((ObjectNode) beforeJsonNode).put(cdcColumn, "delete");
+                ((ObjectNode) afterJsonNode).put(cdcColumn, "update");
+            }
+        }
+
+//        RowType beforeRowType = jsonToRowType(beforeJsonNode);
+//        RowType afterRowType = jsonToRowType(afterJsonNode);
+        String[] beforeFieldArray = beforeTypeStr.split(",");
+        RowType beforeRowType = jsonToRowType(beforeFieldArray);
+        String[] afterFieldArray = afterTypeStr.split(",");
+        RowType afterRowType = jsonToRowType(afterFieldArray);
+
+        JsonToRowDataConverters.JsonToRowDataConverter beforeConverter = this.converter.createConverter(beforeRowType);
+        RowData beforeRowData = (RowData) beforeConverter.convert(beforeJsonNode);
+
+        JsonToRowDataConverters.JsonToRowDataConverter afterConverter = this.converter.createConverter(afterRowType);
+        RowData afterRowData = (RowData) afterConverter.convert(afterJsonNode);
+
+        if (op.equals("insert")) {
+            builder.setOperation("insert").setAfterRowData(afterRowData).setAfterType(afterRowType);
+        } else if (op.equals("delete")) {
+            builder.setOperation("delete").setBeforeRowData(beforeRowData).setBeforeRowType(beforeRowType);
+        } else {
+            if (partitionFieldsChanged(beforeRowType, beforeRowData, afterRowType, afterRowData)) {
+                // partition fields changed. we need to emit both before and after RowData
+                builder.setOperation("update").setBeforeRowData(beforeRowData).setBeforeRowType(beforeRowType)
+                        .setAfterRowData(afterRowData).setAfterType(afterRowType);
+            } else {
+                // otherwise we only need to keep the after RowData
+                builder.setOperation("update")
+                        .setAfterRowData(afterRowData).setAfterType(afterRowType);
+            }
+        }
+
+        return builder.build();
+    }
+
+    private String getOPType(String opType) {
+        switch (opType) {
+            case "U":
+                return "update";
+            case "D":
+                return "delete";
+            case "I":
+            default:
+                return "insert";
+        }
+    }
+
+    public LogicalType convertToLogical(Schema.Type schema) {
+        switch (schema) {
+            case BOOLEAN:
+                return new BooleanType();
+            case INT8:
+            case INT16:
+            case INT32:
+                return new IntType();
+            case INT64:
+                return new BigIntType();
+            case FLOAT32:
+                return new FloatType();
+            case FLOAT64:
+                return new DoubleType();
+            case STRING:
+                return new VarCharType(Integer.MAX_VALUE);
+            default:
+                return null;
+        }
+    }
+
+    public RowType jsonToRowType(JsonNode jsonNode) {
+        Iterator<String> iterator = jsonNode.fieldNames();
+
+        List<RowType.RowField> fields = new ArrayList();
+
+        while (iterator.hasNext()) {
+            String colName = iterator.next();
+            JsonNode value = jsonNode.get(colName);
+            if (value.isInt()) {
+                fields.add(new RowType.RowField(colName, new IntType(false)));
+            } else if (value.isLong()) {
+                fields.add(new RowType.RowField(colName, new BigIntType(false)));
+            } else if (value.isTextual()){
+                fields.add(new RowType.RowField(colName, new VarCharType(false, Integer.MAX_VALUE)));
+            } else if (value.isDouble()) {
+                fields.add(new RowType.RowField(colName, new DoubleType(false)));
+            } else if (value.isBoolean()) {
+                fields.add(new RowType.RowField(colName, new BooleanType(false)));
+            }
+        }
+        return new RowType(true, fields);
+    }
+
+    public RowType jsonToRowType(String[] fieldTypeArray) {
+        List<RowType.RowField> fields = new ArrayList();
+        for (String ele : fieldTypeArray) {
+            String[] colNameAndType = ele.split(":");
+            String colName = colNameAndType[0].trim();
+            String colType = colNameAndType[1].toLowerCase(Locale.ROOT).trim();
+            fields.add(new RowType.RowField(colName, getLogicalTypeFromName(colType)));
+        }
+        fields.add(new RowType.RowField(SORT_FIELD, new BigIntType(true)));
+        if (useCDC) {
+            fields.add(new RowType.RowField(cdcColumn, new VarCharType(false, Integer.MAX_VALUE)));
+        }
+
+        return new RowType(true, fields);
+    }
+
+    public LogicalType getLogicalTypeFromName(String type) {
+//        private val FIXED_DECIMAL = """decimal\(\s*(\d+)\s*,\s*(\-?\d+)\s*\)""".r
+        switch (type) {
+            case "boolean":
+                return new BooleanType(true);
+            case "bit":
+            case "binary":
+            case "varbinary":
+            case "blob":
+            case "tinyblob":
+            case "mediumblob":
+                return new BinaryType();
+            case "bigint":
+                return new BigIntType(true);
+            case "int":
+            case "tinyint":
+            case "smallint":
+            case "integer":
+            case "mediumint":
+                return new IntType(true);
+            case "double":
+                return new DoubleType(true);
+            case "float":
+                return new FloatType(true);
+            case "date":
+                return new DateType(true);
+            case "datetime":
+            case "timestamp":
+                return new TimestampType(true, 6);
+            case "decimal":
+                return new DecimalType(10,2);
+//                case FIXED_DECIMAL(10, 2):
+//                    new DecimalType(10, 2);
+//                case CHAR_TYPE(length) => CharType(length.toInt)
+            case "char":
+            case "varchar":
+            case "string":
+            case "longtext":
+            case "mediumtext":
+            case "text":
+            case "tinytext":
+            case "json":
+            default:
+                return new VarCharType(true, Integer.MAX_VALUE);
+        }
+    }
+
 }
