@@ -97,7 +97,7 @@ public class KafkaCdc {
             case "timestamp":
                 offSet = OffsetsInitializer.timestamp((Long.parseLong(startTimeStamp)));
                 break;
-            case "committedOffset":
+            case "committedOffsets":
             default:
                 offSet = OffsetsInitializer.committedOffsets();
 

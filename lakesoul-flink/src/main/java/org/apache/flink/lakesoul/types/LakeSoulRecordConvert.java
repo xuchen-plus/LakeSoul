@@ -54,8 +54,6 @@ import org.apache.flink.table.data.binary.BinaryRowData;
 import org.apache.flink.table.data.writer.BinaryRowWriter;
 import org.apache.flink.table.types.logical.*;
 import org.apache.flink.types.RowKind;
-import org.apache.spark.sql.types.DatetimeType;
-import org.apache.spark.sql.types.TimestampNTZType;
 
 import java.io.Serializable;
 import java.math.BigDecimal;
@@ -64,15 +62,19 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 
 import static org.apache.flink.formats.common.TimestampFormat.SQL;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.CDC_CHANGE_COLUMN;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.CDC_CHANGE_COLUMN_DEFAULT;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.SORT_FIELD;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.USE_CDC;
-
-import static org.apache.flink.formats.common.TimestampFormat.ISO_8601;
 
 public class LakeSoulRecordConvert implements Serializable {
 
@@ -746,27 +748,6 @@ public class LakeSoulRecordConvert implements Serializable {
         }
     }
 
-    public LogicalType convertToLogical(Schema.Type schema) {
-        switch (schema) {
-            case BOOLEAN:
-                return new BooleanType();
-            case INT8:
-            case INT16:
-            case INT32:
-                return new IntType();
-            case INT64:
-                return new BigIntType();
-            case FLOAT32:
-                return new FloatType();
-            case FLOAT64:
-                return new DoubleType();
-            case STRING:
-                return new VarCharType(Integer.MAX_VALUE);
-            default:
-                return null;
-        }
-    }
-
     public RowType jsonToRowType(JsonNode jsonNode) {
         Iterator<String> iterator = jsonNode.fieldNames();
 
@@ -776,15 +757,15 @@ public class LakeSoulRecordConvert implements Serializable {
             String colName = iterator.next();
             JsonNode value = jsonNode.get(colName);
             if (value.isInt()) {
-                fields.add(new RowType.RowField(colName, new IntType(false)));
+                fields.add(new RowType.RowField(colName, new IntType(true)));
             } else if (value.isLong()) {
-                fields.add(new RowType.RowField(colName, new BigIntType(false)));
+                fields.add(new RowType.RowField(colName, new BigIntType(true)));
             } else if (value.isTextual()){
-                fields.add(new RowType.RowField(colName, new VarCharType(false, Integer.MAX_VALUE)));
+                fields.add(new RowType.RowField(colName, new VarCharType(true, Integer.MAX_VALUE)));
             } else if (value.isDouble()) {
-                fields.add(new RowType.RowField(colName, new DoubleType(false)));
+                fields.add(new RowType.RowField(colName, new DoubleType(true)));
             } else if (value.isBoolean()) {
-                fields.add(new RowType.RowField(colName, new BooleanType(false)));
+                fields.add(new RowType.RowField(colName, new BooleanType(true)));
             }
         }
         return new RowType(true, fields);
@@ -792,22 +773,29 @@ public class LakeSoulRecordConvert implements Serializable {
 
     public RowType jsonToRowType(String[] fieldTypeArray) {
         List<RowType.RowField> fields = new ArrayList();
-        for (String ele : fieldTypeArray) {
-            String[] colNameAndType = ele.split(":");
-            String colName = colNameAndType[0].trim();
-            String colType = colNameAndType[1].toLowerCase(Locale.ROOT).trim();
-            fields.add(new RowType.RowField(colName, getLogicalTypeFromName(colType)));
+        for (String fieldStr : fieldTypeArray) {
+            String[] colDefine = fieldStr.split(" ");
+            String nameAndType = colDefine[0];
+            String colName = nameAndType.split(":")[0];
+            String colType = nameAndType.split(":")[1];
+            int precision = 0;
+            if (colDefine.length > 1) {
+                precision = Integer.parseInt(colDefine[1].split(":")[1]);
+            }
+            int scale = 0;
+            if (colDefine.length > 2) {
+                scale = Integer.parseInt(colDefine[2].split(":")[1]);
+            }
+            fields.add(new RowType.RowField(colName, getLogicalTypeFromName(colType, precision, scale)));
         }
         fields.add(new RowType.RowField(SORT_FIELD, new BigIntType(true)));
         if (useCDC) {
             fields.add(new RowType.RowField(cdcColumn, new VarCharType(false, Integer.MAX_VALUE)));
         }
-
         return new RowType(true, fields);
     }
 
-    public LogicalType getLogicalTypeFromName(String type) {
-//        private val FIXED_DECIMAL = """decimal\(\s*(\d+)\s*,\s*(\-?\d+)\s*\)""".r
+    public LogicalType getLogicalTypeFromName(String type, int precision, int scale) {
         switch (type) {
             case "boolean":
                 return new BooleanType(true);
@@ -817,7 +805,7 @@ public class LakeSoulRecordConvert implements Serializable {
             case "blob":
             case "tinyblob":
             case "mediumblob":
-                return new BinaryType();
+                return new BinaryType(Integer.MAX_VALUE);
             case "bigint":
                 return new BigIntType(true);
             case "int":
@@ -836,10 +824,7 @@ public class LakeSoulRecordConvert implements Serializable {
             case "timestamp":
                 return new TimestampType(true, 6);
             case "decimal":
-                return new DecimalType(10,2);
-//                case FIXED_DECIMAL(10, 2):
-//                    new DecimalType(10, 2);
-//                case CHAR_TYPE(length) => CharType(length.toInt)
+                return new DecimalType(true, precision,scale);
             case "char":
             case "varchar":
             case "string":

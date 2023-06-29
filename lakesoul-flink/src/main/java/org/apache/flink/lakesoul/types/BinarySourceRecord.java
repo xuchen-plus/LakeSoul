@@ -19,11 +19,8 @@
 
 package org.apache.flink.lakesoul.types;
 
-import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.core.json.JsonReadFeature;
 import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.databind.JsonNode;
 import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.databind.ObjectMapper;
-import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.databind.node.ObjectNode;
-import com.ververica.cdc.connectors.shaded.org.apache.kafka.common.serialization.Deserializer;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Field;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Schema;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.SchemaAndValue;
@@ -32,9 +29,6 @@ import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.source.Sourc
 import io.debezium.data.Envelope;
 import org.apache.commons.lang.StringUtils;
 import org.apache.flink.core.fs.Path;
-import org.apache.flink.lakesoul.tool.JacksonMapperFactory;
-import org.apache.flink.table.types.logical.RowType;
-import org.apache.flink.table.types.logical.VarCharType;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import java.util.ArrayList;
@@ -45,7 +39,6 @@ import java.util.List;
 import static com.ververica.cdc.connectors.mysql.source.utils.RecordUtils.SCHEMA_CHANGE_EVENT_KEY_NAME;
 
 public class BinarySourceRecord {
-    public static long MAX_BINLOG_SIZE = 1073741824;
 
     private final String topic;
 
@@ -122,7 +115,7 @@ public class BinarySourceRecord {
                 }
 
             }
-            long sortField = MAX_BINLOG_SIZE * (2 + binlogFileIndex) + binlogPosition;
+            long sortField = (binlogFileIndex << 32) + binlogPosition;
             LakeSoulRowDataWrapper data = convert.toLakeSoulDataType(valueSchema, value, tableId, sortField);
             String tablePath = new Path(new Path(basePath, tableId.schema()), tableId.table()).toString();
 
