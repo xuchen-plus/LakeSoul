@@ -4,7 +4,6 @@ import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.databind.Object
 import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.connector.kafka.source.reader.deserializer.KafkaRecordDeserializationSchema;
-import org.apache.flink.lakesoul.tool.JacksonMapperFactory;
 import org.apache.flink.util.Collector;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
