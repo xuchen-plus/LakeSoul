@@ -157,10 +157,16 @@ public class BinarySourceRecord {
         TableId tableId = new TableId("lakesoul", databaseName, tableName);
 
         String opType = valueNode.get("op").asText();
+        String beforeTypeStr = null;
         JsonNode before = valueNode.get("before");
-        String beforeTypeStr = valueNode.get("before_field_type").asText();
+        if (before != null) {
+            beforeTypeStr = valueNode.get("before_field_type").asText();
+        }
+        String afterTypeStr = null;
         JsonNode after = valueNode.get("after");
-        String afterTypeStr = valueNode.get("after_field_type").asText();
+        if (after != null) {
+            afterTypeStr = valueNode.get("after_field_type").asText();
+        }
 
         long sortField = offset;
 

@@ -66,7 +66,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -88,7 +87,7 @@ public class LakeSoulRecordConvert implements Serializable {
 
     private final JSONObject properties;
 
-    JsonToRowDataConverters converter = new JsonToRowDataConverters(true, false, SQL);
+    JsonToRowDataConverters converter = new JsonToRowDataConverters(false, false, SQL);
 
     public LakeSoulRecordConvert(Configuration conf, String serverTimeZone) {
         this(conf, serverTimeZone, Collections.emptyList());
@@ -690,11 +689,23 @@ public class LakeSoulRecordConvert implements Serializable {
             if (useCDC) {
                 ((ObjectNode) afterJsonNode).put(cdcColumn, "insert");
             }
+            String[] afterFieldArray = afterTypeStr.split(",");
+            RowType afterRowType = jsonToRowType(afterFieldArray);
+            JsonToRowDataConverters.JsonToRowDataConverter afterConverter = this.converter.createConverter(afterRowType);
+            RowData afterRowData = (RowData) afterConverter.convert(afterJsonNode);
+            afterRowData.setRowKind(RowKind.INSERT);
+            builder.setOperation("insert").setAfterRowData(afterRowData).setAfterType(afterRowType);
         } else if (op.equals("delete")) {
             ((ObjectNode) beforeJsonNode).put(SORT_FIELD, sortField);
             if (useCDC) {
                 ((ObjectNode) beforeJsonNode).put(cdcColumn, "delete");
             }
+            String[] beforeFieldArray = beforeTypeStr.split(",");
+            RowType beforeRowType = jsonToRowType(beforeFieldArray);
+            JsonToRowDataConverters.JsonToRowDataConverter beforeConverter = this.converter.createConverter(beforeRowType);
+            RowData beforeRowData = (RowData) beforeConverter.convert(beforeJsonNode);
+            beforeRowData.setRowKind(RowKind.DELETE);
+            builder.setOperation("delete").setBeforeRowData(beforeRowData).setBeforeRowType(beforeRowType);
         } else {
             ((ObjectNode) afterJsonNode).put(SORT_FIELD, sortField);
             ((ObjectNode) beforeJsonNode).put(SORT_FIELD, sortField);
@@ -702,26 +713,17 @@ public class LakeSoulRecordConvert implements Serializable {
                 ((ObjectNode) beforeJsonNode).put(cdcColumn, "delete");
                 ((ObjectNode) afterJsonNode).put(cdcColumn, "update");
             }
-        }
+            String[] afterFieldArray = afterTypeStr.split(",");
+            RowType afterRowType = jsonToRowType(afterFieldArray);
+            String[] beforeFieldArray = beforeTypeStr.split(",");
+            RowType beforeRowType = jsonToRowType(beforeFieldArray);
 
-//        RowType beforeRowType = jsonToRowType(beforeJsonNode);
-//        RowType afterRowType = jsonToRowType(afterJsonNode);
-        String[] beforeFieldArray = beforeTypeStr.split(",");
-        RowType beforeRowType = jsonToRowType(beforeFieldArray);
-        String[] afterFieldArray = afterTypeStr.split(",");
-        RowType afterRowType = jsonToRowType(afterFieldArray);
-
-        JsonToRowDataConverters.JsonToRowDataConverter beforeConverter = this.converter.createConverter(beforeRowType);
-        RowData beforeRowData = (RowData) beforeConverter.convert(beforeJsonNode);
-
-        JsonToRowDataConverters.JsonToRowDataConverter afterConverter = this.converter.createConverter(afterRowType);
-        RowData afterRowData = (RowData) afterConverter.convert(afterJsonNode);
-
-        if (op.equals("insert")) {
-            builder.setOperation("insert").setAfterRowData(afterRowData).setAfterType(afterRowType);
-        } else if (op.equals("delete")) {
-            builder.setOperation("delete").setBeforeRowData(beforeRowData).setBeforeRowType(beforeRowType);
-        } else {
+            JsonToRowDataConverters.JsonToRowDataConverter beforeConverter = this.converter.createConverter(beforeRowType);
+            RowData beforeRowData = (RowData) beforeConverter.convert(beforeJsonNode);
+            beforeRowData.setRowKind(RowKind.UPDATE_AFTER);
+            JsonToRowDataConverters.JsonToRowDataConverter afterConverter = this.converter.createConverter(afterRowType);
+            RowData afterRowData = (RowData) afterConverter.convert(afterJsonNode);
+            afterRowData.setRowKind(RowKind.UPDATE_AFTER);
             if (partitionFieldsChanged(beforeRowType, beforeRowData, afterRowType, afterRowData)) {
                 // partition fields changed. we need to emit both before and after RowData
                 builder.setOperation("update").setBeforeRowData(beforeRowData).setBeforeRowType(beforeRowType)
@@ -786,56 +788,13 @@ public class LakeSoulRecordConvert implements Serializable {
             if (colDefine.length > 2) {
                 scale = Integer.parseInt(colDefine[2].split(":")[1]);
             }
-            fields.add(new RowType.RowField(colName, getLogicalTypeFromName(colType, precision, scale)));
+            fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale)));
         }
         fields.add(new RowType.RowField(SORT_FIELD, new BigIntType(true)));
         if (useCDC) {
             fields.add(new RowType.RowField(cdcColumn, new VarCharType(false, Integer.MAX_VALUE)));
         }
         return new RowType(true, fields);
-    }
-
-    public LogicalType getLogicalTypeFromName(String type, int precision, int scale) {
-        switch (type) {
-            case "boolean":
-                return new BooleanType(true);
-            case "bit":
-            case "binary":
-            case "varbinary":
-            case "blob":
-            case "tinyblob":
-            case "mediumblob":
-                return new BinaryType(Integer.MAX_VALUE);
-            case "bigint":
-                return new BigIntType(true);
-            case "int":
-            case "tinyint":
-            case "smallint":
-            case "integer":
-            case "mediumint":
-                return new IntType(true);
-            case "double":
-                return new DoubleType(true);
-            case "float":
-                return new FloatType(true);
-            case "date":
-                return new DateType(true);
-            case "datetime":
-            case "timestamp":
-                return new TimestampType(true, 6);
-            case "decimal":
-                return new DecimalType(true, precision,scale);
-            case "char":
-            case "varchar":
-            case "string":
-            case "longtext":
-            case "mediumtext":
-            case "text":
-            case "tinytext":
-            case "json":
-            default:
-                return new VarCharType(true, Integer.MAX_VALUE);
-        }
     }
 
 }

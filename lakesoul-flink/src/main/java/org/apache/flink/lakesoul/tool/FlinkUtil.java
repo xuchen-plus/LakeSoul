@@ -38,9 +38,19 @@ import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.runtime.arrow.ArrowUtils;
 import org.apache.flink.table.types.DataType;
+import org.apache.flink.table.types.logical.BigIntType;
+import org.apache.flink.table.types.logical.BinaryType;
+import org.apache.flink.table.types.logical.BooleanType;
+import org.apache.flink.table.types.logical.DateType;
+import org.apache.flink.table.types.logical.DoubleType;
+import org.apache.flink.table.types.logical.DecimalType;
+import org.apache.flink.table.types.logical.FloatType;
+import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.TimestampType;
+import org.apache.flink.table.types.logical.VarCharType;
 import org.apache.flink.table.types.logical.utils.LogicalTypeChecks;
 import org.apache.flink.types.RowKind;
 import org.apache.spark.sql.types.Metadata;
@@ -163,6 +173,50 @@ public class FlinkUtil {
             return StringData.fromString("delete");
         }
         return null;
+    }
+
+    public static LogicalType fromNameToLogicalType(String type, int precision, int scale) {
+        String trimType = type.toLowerCase(Locale.ROOT).trim();
+        switch (trimType) {
+            case "boolean":
+                return new BooleanType(true);
+            case "bit":
+            case "binary":
+            case "varbinary":
+            case "blob":
+            case "tinyblob":
+            case "mediumblob":
+                return new BinaryType(Integer.MAX_VALUE);
+            case "bigint":
+                return new BigIntType(true);
+            case "int":
+            case "tinyint":
+            case "smallint":
+            case "integer":
+            case "mediumint":
+                return new IntType(true);
+            case "double":
+                return new DoubleType(true);
+            case "float":
+                return new FloatType(true);
+            case "date":
+                return new DateType(true);
+            case "datetime":
+            case "timestamp":
+                return new TimestampType(true, 6);
+            case "decimal":
+                return new DecimalType(true, precision,scale);
+            case "char":
+            case "varchar":
+            case "string":
+            case "longtext":
+            case "mediumtext":
+            case "text":
+            case "tinytext":
+            case "json":
+            default:
+                return new VarCharType(true, Integer.MAX_VALUE);
+        }
     }
 
     private static final StringData INSERT = StringData.fromString("insert");

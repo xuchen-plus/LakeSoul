@@ -129,7 +129,7 @@ public class KafkaCdc {
         if (splitTopicArray.length < 2) {
             throw new Exception("topic name is not standardized format: t_{dbName/schemaName}_{tableName} ");
         }
-        String namespace = "s_" + splitTopicArray[1];
+        String namespace = splitTopicArray[1];
         DBManager lakeSoulDBManager = new DBManager();
         if (lakeSoulDBManager.getNamespaceByNamespace(namespace) == null) {
             lakeSoulDBManager.createNewNamespace(namespace, new JSONObject(), "");
