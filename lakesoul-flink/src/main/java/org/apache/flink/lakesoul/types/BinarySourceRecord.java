@@ -19,8 +19,6 @@
 
 package org.apache.flink.lakesoul.types;
 
-import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.databind.JsonNode;
-import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.databind.ObjectMapper;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Field;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Schema;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.SchemaAndValue;
@@ -29,6 +27,8 @@ import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.source.Sourc
 import io.debezium.data.Envelope;
 import org.apache.commons.lang.StringUtils;
 import org.apache.flink.core.fs.Path;
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import java.util.ArrayList;

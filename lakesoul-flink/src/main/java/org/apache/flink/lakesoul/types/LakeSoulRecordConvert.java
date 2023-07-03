@@ -19,9 +19,7 @@
 
 package org.apache.flink.lakesoul.types;
 
-import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.databind.JsonNode;
 import com.alibaba.fastjson.JSONObject;
-import com.ververica.cdc.connectors.shaded.com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Decimal;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Field;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Schema;
@@ -45,10 +43,12 @@ import io.debezium.time.Timestamp;
 import io.debezium.time.Year;
 import io.debezium.time.ZonedTime;
 import io.debezium.time.ZonedTimestamp;
-import org.apache.flink.formats.json.JsonToRowDataConverters;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.formats.json.JsonToRowDataConverters;
 import org.apache.flink.lakesoul.tool.FlinkUtil;
 import org.apache.flink.lakesoul.tool.LakeSoulKeyGen;
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.flink.table.data.*;
 import org.apache.flink.table.data.binary.BinaryRowData;
 import org.apache.flink.table.data.writer.BinaryRowWriter;
