@@ -58,6 +58,8 @@ import org.apache.flink.types.RowKind;
 import java.io.Serializable;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -690,7 +692,7 @@ public class LakeSoulRecordConvert implements Serializable {
                 ((ObjectNode) afterJsonNode).put(cdcColumn, "insert");
             }
             String[] afterFieldArray = afterTypeStr.split(",");
-            RowType afterRowType = jsonToRowType(afterFieldArray);
+            RowType afterRowType = jsonToRowType(afterFieldArray, (ObjectNode) afterJsonNode);
             JsonToRowDataConverters.JsonToRowDataConverter afterConverter = this.converter.createConverter(afterRowType);
             RowData afterRowData = (RowData) afterConverter.convert(afterJsonNode);
             afterRowData.setRowKind(RowKind.INSERT);
@@ -701,7 +703,7 @@ public class LakeSoulRecordConvert implements Serializable {
                 ((ObjectNode) beforeJsonNode).put(cdcColumn, "delete");
             }
             String[] beforeFieldArray = beforeTypeStr.split(",");
-            RowType beforeRowType = jsonToRowType(beforeFieldArray);
+            RowType beforeRowType = jsonToRowType(beforeFieldArray, (ObjectNode) beforeJsonNode);
             JsonToRowDataConverters.JsonToRowDataConverter beforeConverter = this.converter.createConverter(beforeRowType);
             RowData beforeRowData = (RowData) beforeConverter.convert(beforeJsonNode);
             beforeRowData.setRowKind(RowKind.DELETE);
@@ -714,9 +716,9 @@ public class LakeSoulRecordConvert implements Serializable {
                 ((ObjectNode) afterJsonNode).put(cdcColumn, "update");
             }
             String[] afterFieldArray = afterTypeStr.split(",");
-            RowType afterRowType = jsonToRowType(afterFieldArray);
+            RowType afterRowType = jsonToRowType(afterFieldArray, (ObjectNode) afterJsonNode);
             String[] beforeFieldArray = beforeTypeStr.split(",");
-            RowType beforeRowType = jsonToRowType(beforeFieldArray);
+            RowType beforeRowType = jsonToRowType(beforeFieldArray, (ObjectNode) beforeJsonNode);
 
             JsonToRowDataConverters.JsonToRowDataConverter beforeConverter = this.converter.createConverter(beforeRowType);
             RowData beforeRowData = (RowData) beforeConverter.convert(beforeJsonNode);
@@ -750,7 +752,7 @@ public class LakeSoulRecordConvert implements Serializable {
         }
     }
 
-    public RowType jsonToRowType(JsonNode jsonNode) {
+    public RowType jsonToRowType(JsonNode jsonNode, ObjectNode afterJsonNode) {
         Iterator<String> iterator = jsonNode.fieldNames();
 
         List<RowType.RowField> fields = new ArrayList();
@@ -773,7 +775,7 @@ public class LakeSoulRecordConvert implements Serializable {
         return new RowType(true, fields);
     }
 
-    public RowType jsonToRowType(String[] fieldTypeArray) {
+    public RowType jsonToRowType(String[] fieldTypeArray, ObjectNode valueNode) {
         List<RowType.RowField> fields = new ArrayList();
         for (String fieldStr : fieldTypeArray) {
             String[] colDefine = fieldStr.split(" ");
@@ -789,6 +791,17 @@ public class LakeSoulRecordConvert implements Serializable {
                 scale = Integer.parseInt(colDefine[2].split(":")[1]);
             }
             fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale)));
+            if (colType.equals("timestamp") || colType.equals("datetime")) {
+                SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+                try {
+                    String value = valueNode.get(colName).asText();
+                    java.util.Date parse = sdf.parse(value);
+                    Instant parse1 = TimestampData.fromEpochMillis(parse.getTime()).toInstant();
+                    valueNode.put(colName, parse1.toString().replace("T", " "));
+                } catch (ParseException e) {
+                    e.printStackTrace();
+                }
+            }
         }
         fields.add(new RowType.RowField(SORT_FIELD, new BigIntType(true)));
         if (useCDC) {

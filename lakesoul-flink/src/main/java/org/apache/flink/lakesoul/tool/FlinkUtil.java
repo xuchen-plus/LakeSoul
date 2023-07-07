@@ -46,10 +46,10 @@ import org.apache.flink.table.types.logical.DoubleType;
 import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.FloatType;
 import org.apache.flink.table.types.logical.IntType;
+import org.apache.flink.table.types.logical.LocalZonedTimestampType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
-import org.apache.flink.table.types.logical.TimestampType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.apache.flink.table.types.logical.utils.LogicalTypeChecks;
 import org.apache.flink.types.RowKind;
@@ -204,7 +204,7 @@ public class FlinkUtil {
                 return new DateType(true);
             case "datetime":
             case "timestamp":
-                return new TimestampType(true, 6);
+                return new LocalZonedTimestampType();
             case "decimal":
                 return new DecimalType(true, precision,scale);
             case "char":
