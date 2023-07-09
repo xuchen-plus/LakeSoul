@@ -27,6 +27,7 @@ import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.source.Sourc
 import io.debezium.data.Envelope;
 import org.apache.commons.lang.StringUtils;
 import org.apache.flink.core.fs.Path;
+import org.apache.flink.lakesoul.tool.FlinkUtil;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -173,7 +174,7 @@ public class BinarySourceRecord {
         LakeSoulRowDataWrapper data = convert.kafkaToLakeSoulDataType(before, beforeTypeStr, after, afterTypeStr, opType, tableId, sortField);
         String tablePath = new Path(new Path(basePath, tableId.schema()), tableId.table()).toString();
 
-        return new BinarySourceRecord(tableId.toString(), keyList, tableId, tablePath,
+        return new BinarySourceRecord(tableId.toString(), keyList, tableId, FlinkUtil.makeQualifiedPath(tablePath).toString(),
                 Collections.emptyList(), false, data, null);
     }
 
