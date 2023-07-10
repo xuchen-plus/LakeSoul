@@ -62,10 +62,10 @@ public class LakeSoulKafkaSinkOptions extends LakeSoulSinkOptions{
             .key("security_protocol")
             .stringType()
             .noDefaultValue()
-            .withDescription("security protocol when connect kafka,includes SASL_SSL and SASL_PLAINTEXT");
+            .withDescription("security protocol when connect kafka,includes SASL_PLAINTEXT, SSL and SASL_SSL");
 
     public static final ConfigOption<String> SASL_MECHANISM = ConfigOptions
-            .key("mechanism")
+            .key("sasl_mechanism")
             .stringType()
             .noDefaultValue()
             .withDescription("Used to specify the security protocol used when connecting to the Kafka cluster,which includes SCRAM-SHA-256 and PLAIN");
@@ -83,7 +83,7 @@ public class LakeSoulKafkaSinkOptions extends LakeSoulSinkOptions{
             .withDescription("Configure the path of truststore (CA) provided by the server");
 
     public static final ConfigOption<String> SSL_TRUSTSTORE_PASSWORD = ConfigOptions
-            .key("truststore_password")
+            .key("ssl_truststore_password")
             .stringType()
             .noDefaultValue()
             .withDescription("Configure the passwd of truststore (CA) provided by the server");

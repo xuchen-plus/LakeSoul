@@ -107,6 +107,15 @@ public class KafkaCdc {
             if (securityProtocol.equals("SASL_PLAINTEXT")) {
                 pro.put("sasl.mechanism", saslMechanism);
                 pro.put("sasl.jaas.config", saslJaasConfig);
+            } else if (securityProtocol.equals("SSL")) {
+                // SSL configurations
+                // Configure the path of truststore (CA) provided by the server
+                pro.put("ssl.truststore.location", sslTrustStoreLocation);
+                pro.put("ssl.truststore.password", sslTrustStorePasswd);
+                // Configure the path of keystore (private key) if client authentication is required
+                pro.put("ssl.keystore.location", sslKeyStoreLocation);
+                pro.put("ssl.keystore.password", sslKeyStorePasswd);
+                pro.put("ssl.endpoint.identification.algorithm", "");
             } else if (securityProtocol.equals("SASL_SSL")) {
                 // SSL configurations
                 // Configure the path of truststore (CA) provided by the server
@@ -120,15 +129,6 @@ public class KafkaCdc {
                 pro.put("sasl.mechanism", saslMechanism);
                 // Set JAAS configurations
                 pro.put("sasl.jaas.config", saslJaasConfig);
-                pro.put("ssl.endpoint.identification.algorithm", "");
-            } else if (securityProtocol.equals("SSL")) {
-                // SSL configurations
-                // Configure the path of truststore (CA) provided by the server
-                pro.put("ssl.truststore.location", sslTrustStoreLocation);
-                pro.put("ssl.truststore.password", sslTrustStorePasswd);
-                // Configure the path of keystore (private key) if client authentication is required
-                pro.put("ssl.keystore.location", sslKeyStoreLocation);
-                pro.put("ssl.keystore.password", sslKeyStorePasswd);
                 pro.put("ssl.endpoint.identification.algorithm", "");
             }
         }
