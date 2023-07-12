@@ -176,37 +176,37 @@ public class FlinkUtil {
         return null;
     }
 
-    public static LogicalType fromNameToLogicalType(String type, int precision, int scale) {
+    public static LogicalType fromNameToLogicalType(String type, int precision, int scale, boolean nullable) {
         String trimType = type.toLowerCase(Locale.ROOT).trim();
         switch (trimType) {
             case "boolean":
-                return new BooleanType(true);
+                return new BooleanType(nullable);
             case "bit":
             case "binary":
             case "varbinary":
             case "blob":
             case "tinyblob":
             case "mediumblob":
-                return new BinaryType(Integer.MAX_VALUE);
+                return new BinaryType(nullable, Integer.MAX_VALUE);
             case "bigint":
-                return new BigIntType(true);
+                return new BigIntType(nullable);
             case "int":
             case "tinyint":
             case "smallint":
             case "integer":
             case "mediumint":
-                return new IntType(true);
+                return new IntType(nullable);
             case "double":
-                return new DoubleType(true);
+                return new DoubleType(nullable);
             case "float":
-                return new FloatType(true);
+                return new FloatType(nullable);
             case "date":
-                return new DateType(true);
+                return new DateType(nullable);
             case "datetime":
             case "timestamp":
                 return new LocalZonedTimestampType();
             case "decimal":
-                return new DecimalType(true, precision,scale);
+                return new DecimalType(nullable, precision,scale);
             case "char":
             case "varchar":
             case "string":
@@ -216,7 +216,7 @@ public class FlinkUtil {
             case "tinytext":
             case "json":
             default:
-                return new VarCharType(true, Integer.MAX_VALUE);
+                return new VarCharType(nullable, Integer.MAX_VALUE);
         }
     }
 

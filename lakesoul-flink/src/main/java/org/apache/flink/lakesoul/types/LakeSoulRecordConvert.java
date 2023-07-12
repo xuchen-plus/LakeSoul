@@ -89,7 +89,7 @@ public class LakeSoulRecordConvert implements Serializable {
 
     private final JSONObject properties;
 
-    JsonToRowDataConverters converter = new JsonToRowDataConverters(false, false, SQL);
+    JsonToRowDataConverters converter = new JsonToRowDataConverters(true, false, SQL);
 
     public LakeSoulRecordConvert(Configuration conf, String serverTimeZone) {
         this(conf, serverTimeZone, Collections.emptyList());
@@ -682,7 +682,10 @@ public class LakeSoulRecordConvert implements Serializable {
         }
     }
 
-    public LakeSoulRowDataWrapper kafkaToLakeSoulDataType(JsonNode beforeJsonNode, String beforeTypeStr, JsonNode afterJsonNode, String afterTypeStr, String opType, TableId tableId, long sortField) throws Exception {
+    public LakeSoulRowDataWrapper kafkaToLakeSoulDataType(JsonNode beforeJsonNode, String beforeTypeStr, JsonNode afterJsonNode,
+                                                          String afterTypeStr, String opType, TableId tableId, List<String> keyList,
+                                                          long sortField) {
+
         LakeSoulRowDataWrapper.Builder builder = LakeSoulRowDataWrapper.newBuilder().setTableId(tableId);
         String op = getOPType(opType);
 
@@ -692,7 +695,7 @@ public class LakeSoulRecordConvert implements Serializable {
                 ((ObjectNode) afterJsonNode).put(cdcColumn, "insert");
             }
             String[] afterFieldArray = afterTypeStr.split(",");
-            RowType afterRowType = jsonToRowType(afterFieldArray, (ObjectNode) afterJsonNode);
+            RowType afterRowType = jsonToRowType(afterFieldArray, (ObjectNode) afterJsonNode, keyList);
             JsonToRowDataConverters.JsonToRowDataConverter afterConverter = this.converter.createConverter(afterRowType);
             RowData afterRowData = (RowData) afterConverter.convert(afterJsonNode);
             afterRowData.setRowKind(RowKind.INSERT);
@@ -703,7 +706,7 @@ public class LakeSoulRecordConvert implements Serializable {
                 ((ObjectNode) beforeJsonNode).put(cdcColumn, "delete");
             }
             String[] beforeFieldArray = beforeTypeStr.split(",");
-            RowType beforeRowType = jsonToRowType(beforeFieldArray, (ObjectNode) beforeJsonNode);
+            RowType beforeRowType = jsonToRowType(beforeFieldArray, (ObjectNode) beforeJsonNode, keyList);
             JsonToRowDataConverters.JsonToRowDataConverter beforeConverter = this.converter.createConverter(beforeRowType);
             RowData beforeRowData = (RowData) beforeConverter.convert(beforeJsonNode);
             beforeRowData.setRowKind(RowKind.DELETE);
@@ -716,9 +719,9 @@ public class LakeSoulRecordConvert implements Serializable {
                 ((ObjectNode) afterJsonNode).put(cdcColumn, "update");
             }
             String[] afterFieldArray = afterTypeStr.split(",");
-            RowType afterRowType = jsonToRowType(afterFieldArray, (ObjectNode) afterJsonNode);
+            RowType afterRowType = jsonToRowType(afterFieldArray, (ObjectNode) afterJsonNode, keyList);
             String[] beforeFieldArray = beforeTypeStr.split(",");
-            RowType beforeRowType = jsonToRowType(beforeFieldArray, (ObjectNode) beforeJsonNode);
+            RowType beforeRowType = jsonToRowType(beforeFieldArray, (ObjectNode) beforeJsonNode, keyList);
 
             JsonToRowDataConverters.JsonToRowDataConverter beforeConverter = this.converter.createConverter(beforeRowType);
             RowData beforeRowData = (RowData) beforeConverter.convert(beforeJsonNode);
@@ -764,7 +767,7 @@ public class LakeSoulRecordConvert implements Serializable {
                 fields.add(new RowType.RowField(colName, new IntType(true)));
             } else if (value.isLong()) {
                 fields.add(new RowType.RowField(colName, new BigIntType(true)));
-            } else if (value.isTextual()){
+            } else if (value.isTextual()) {
                 fields.add(new RowType.RowField(colName, new VarCharType(true, Integer.MAX_VALUE)));
             } else if (value.isDouble()) {
                 fields.add(new RowType.RowField(colName, new DoubleType(true)));
@@ -775,7 +778,7 @@ public class LakeSoulRecordConvert implements Serializable {
         return new RowType(true, fields);
     }
 
-    public RowType jsonToRowType(String[] fieldTypeArray, ObjectNode valueNode) {
+    public RowType jsonToRowType(String[] fieldTypeArray, ObjectNode valueNode, List<String> keyList) {
         List<RowType.RowField> fields = new ArrayList();
         for (String fieldStr : fieldTypeArray) {
             String[] colDefine = fieldStr.split(" ");
@@ -790,7 +793,11 @@ public class LakeSoulRecordConvert implements Serializable {
             if (colDefine.length > 2) {
                 scale = Integer.parseInt(colDefine[2].split(":")[1]);
             }
-            fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale)));
+            boolean nullable = true;
+            if (keyList.contains(colName)) {
+                nullable = false;
+            }
+            fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale, nullable)));
             if (colType.equals("timestamp") || colType.equals("datetime")) {
                 SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
                 try {

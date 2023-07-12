@@ -104,9 +104,9 @@ public class BinarySourceRecord {
             long binlogFileIndex = 0;
             long binlogPosition = 0;
             Struct source = value.getStruct(Envelope.FieldName.SOURCE);
-            if (sourceField != null && source != null ) {
+            if (sourceField != null && source != null) {
                 if (sourceField.schema().field("file") != null) {
-                    String fileName = (String)source.getWithoutDefault("file");
+                    String fileName = (String) source.getWithoutDefault("file");
                     if (StringUtils.isNotBlank(fileName)) {
                         binlogFileIndex = Long.parseLong(fileName.substring(fileName.lastIndexOf(".") + 1));
                     }
@@ -134,7 +134,7 @@ public class BinarySourceRecord {
         int partition = consumerRecord.partition();
         long offset = consumerRecord.offset();
 
-        JsonNode keyNode = objectMapper.readTree((byte[])consumerRecord.key());
+        JsonNode keyNode = objectMapper.readTree((byte[]) consumerRecord.key());
         JsonNode valueNode = objectMapper.readTree((byte[]) consumerRecord.value());
 
         List<String> keyList = new ArrayList<>();
@@ -171,7 +171,7 @@ public class BinarySourceRecord {
 
         long sortField = offset;
 
-        LakeSoulRowDataWrapper data = convert.kafkaToLakeSoulDataType(before, beforeTypeStr, after, afterTypeStr, opType, tableId, sortField);
+        LakeSoulRowDataWrapper data = convert.kafkaToLakeSoulDataType(before, beforeTypeStr, after, afterTypeStr, opType, tableId, keyList, sortField);
         String tablePath = new Path(new Path(basePath, tableId.schema()), tableId.table()).toString();
 
         return new BinarySourceRecord(tableId.toString(), keyList, tableId, FlinkUtil.makeQualifiedPath(tablePath).toString(),
