@@ -352,6 +352,10 @@ public class DBManager {
 
     public void updateTableProperties(String tableId, JSONObject properties) {
         TableInfo tableInfo = tableInfoDao.selectByTableId(tableId);
+        if (tableInfo.getProperties() != null && tableInfo.getProperties().containsKey("domain")) {
+            // do not modify domain in properties for this table
+            properties.put("domain", tableInfo.getProperties().get("domain"));
+        }
         tableInfo.setProperties(properties);
         tableInfoDao.updatePropertiesById(tableId, properties);
     }
@@ -838,6 +842,10 @@ public class DBManager {
 
     public void updateNamespaceProperties(String namespace, JSONObject properties) {
         Namespace namespaceEntity = namespaceDao.findByNamespace(namespace);
+        if (namespaceEntity.getProperties() != null && namespaceEntity.getProperties().containsKey("domain")) {
+            // do not modify domain in properties for this namespace
+            properties.put("domain", namespaceEntity.getProperties().get("domain"));
+        }
         namespaceEntity.setProperties(properties);
         namespaceDao.updatePropertiesByNamespace(namespace, properties);
     }
