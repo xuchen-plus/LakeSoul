@@ -37,6 +37,7 @@ import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.CheckpointConfig;
 import org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
@@ -99,7 +100,7 @@ public class KafkaCdc {
                 break;
             case "committedOffsets":
             default:
-                offSet = OffsetsInitializer.committedOffsets();
+                offSet = OffsetsInitializer.committedOffsets(OffsetResetStrategy.LATEST);
 
         }
         if (securityProtocol != null) {
