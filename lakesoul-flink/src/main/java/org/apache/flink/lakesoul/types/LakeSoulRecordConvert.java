@@ -70,6 +70,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TimeZone;
 
 import static org.apache.flink.formats.common.TimestampFormat.SQL;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.CDC_CHANGE_COLUMN;
@@ -800,11 +801,12 @@ public class LakeSoulRecordConvert implements Serializable {
             fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale, nullable)));
             if (colType.equals("timestamp") || colType.equals("datetime")) {
                 SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+                sdf.setTimeZone(TimeZone.getTimeZone(serverTimeZone));
                 try {
                     String value = valueNode.get(colName).asText();
-                    java.util.Date parse = sdf.parse(value);
-                    Instant parse1 = TimestampData.fromEpochMillis(parse.getTime()).toInstant();
-                    valueNode.put(colName, parse1.toString().replace("T", " "));
+                    java.util.Date dateValue = sdf.parse(value);
+                    Instant instant = TimestampData.fromEpochMillis(dateValue.getTime()).toInstant();
+                    valueNode.put(colName, instant.toString().replace("T", " "));
                 } catch (ParseException e) {
                     e.printStackTrace();
                 }
