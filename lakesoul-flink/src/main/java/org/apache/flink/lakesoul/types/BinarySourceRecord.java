@@ -120,7 +120,7 @@ public class BinarySourceRecord {
             LakeSoulRowDataWrapper data = convert.toLakeSoulDataType(valueSchema, value, tableId, sortField);
             String tablePath = new Path(new Path(basePath, tableId.schema()), tableId.table()).toString();
 
-            return new BinarySourceRecord(sourceRecord.topic(), primaryKeys, tableId, tablePath,
+            return new BinarySourceRecord(sourceRecord.topic(), primaryKeys, tableId, FlinkUtil.makeQualifiedPath(tablePath).toString(),
                     Collections.emptyList(), false, data, null);
         }
     }

@@ -63,14 +63,15 @@ public class KafkaCdc {
         String kafkaTopic = parameter.get(TOPIC.key());
         String topicGroupID = parameter.get(GROUP_ID.key());
 
-        String topicOffset = parameter.get(START_OFFSET.key());
+        String topicOffset = parameter.get(START_OFFSET.key(), START_OFFSET.defaultValue());
         String startTimeStamp = parameter.get(START_TIMESTAMP.key());
 
         String databasePrefixPath = parameter.get(WAREHOUSE_PATH.key());
         int maxPollRecords = parameter.getInt(MAX_POLL_RECORDS.key(), MAX_POLL_RECORDS.defaultValue());
-        int sourceParallelism = parameter.getInt(SOURCE_PARALLELISM.key());
-        int sinkParallelism = parameter.getInt(BUCKET_PARALLELISM.key());
+        int sourceParallelism = parameter.getInt(SOURCE_PARALLELISM.key(), 1);
+        int sinkParallelism = parameter.getInt(BUCKET_PARALLELISM.key(), 1);
         int checkpointInterval = parameter.getInt(JOB_CHECKPOINT_INTERVAL.key(), JOB_CHECKPOINT_INTERVAL.defaultValue());
+        boolean logicallyDropColumn = parameter.getBoolean(LOGICALLY_DROP_COLUM.key(), false);
         String serverTimezone = parameter.get(SERVER_TIME_ZONE.key(), SERVER_TIME_ZONE.defaultValue());
 
         //about security
@@ -152,6 +153,7 @@ public class KafkaCdc {
         conf.set(LakeSoulSinkOptions.WAREHOUSE_PATH, databasePrefixPath);
         conf.set(LakeSoulSinkOptions.SOURCE_PARALLELISM, sourceParallelism);
         conf.set(LakeSoulSinkOptions.BUCKET_PARALLELISM, sinkParallelism);
+        conf.set(LakeSoulSinkOptions.LOGICALLY_DROP_COLUM, logicallyDropColumn);
         conf.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);

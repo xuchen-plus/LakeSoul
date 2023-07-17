@@ -90,7 +90,8 @@ public class LakeSoulRecordConvert implements Serializable {
 
     private final JSONObject properties;
 
-    JsonToRowDataConverters converter = new JsonToRowDataConverters(true, false, SQL);
+    JsonToRowDataConverters converter;
+    SimpleDateFormat sdf;
 
     public LakeSoulRecordConvert(Configuration conf, String serverTimeZone) {
         this(conf, serverTimeZone, Collections.emptyList());
@@ -103,6 +104,10 @@ public class LakeSoulRecordConvert implements Serializable {
         this.partitionFields = partitionFields;
 
         properties = FlinkUtil.getPropertiesFromConfiguration(conf);
+
+        converter = new JsonToRowDataConverters(true, false, SQL);
+        sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        sdf.setTimeZone(TimeZone.getTimeZone(serverTimeZone));
     }
 
     private boolean partitionFieldsChanged(RowType beforeType, RowData beforeData, RowType afterType, RowData afterData) {
@@ -800,8 +805,6 @@ public class LakeSoulRecordConvert implements Serializable {
             }
             fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale, nullable)));
             if (colType.equals("timestamp") || colType.equals("datetime")) {
-                SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-                sdf.setTimeZone(TimeZone.getTimeZone(serverTimeZone));
                 try {
                     String value = valueNode.get(colName).asText();
                     java.util.Date dateValue = sdf.parse(value);
