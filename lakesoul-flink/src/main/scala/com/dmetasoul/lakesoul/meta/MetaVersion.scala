@@ -19,10 +19,9 @@
 
 package com.dmetasoul.lakesoul.meta
 
-import java.util
 import com.alibaba.fastjson.JSONObject
-import com.dmetasoul.lakesoul.meta.DBConfig.LAKESOUL_PARTITION_SPLITTER_OF_RANGE_AND_HASH
 
+import java.util
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
 
@@ -78,7 +77,7 @@ object MetaVersion {
                      configuration: Map[String, String],
                      bucket_num: Int): Unit = {
 
-    val partitions = range_column + LAKESOUL_PARTITION_SPLITTER_OF_RANGE_AND_HASH + hash_column
+    val partitions = DBUtil.formatTableInfoPartitionsField(hash_column, range_column)
     val json = new JSONObject()
     configuration.foreach(x => json.put(x._1, x._2))
     json.put("hashBucketNum", String.valueOf(bucket_num))
@@ -217,12 +216,7 @@ object MetaVersion {
   }
 
   def rollbackPartitionInfoByVersion(table_id: String, range_value: String, toVersion: Int): Unit = {
-    if (dbManager.rollbackPartitionByVersion(table_id, range_value, toVersion)) {
-      println(range_value + " toVersion " + toVersion + " success")
-    } else {
-      println(range_value + " toVersion " + toVersion + " failed. Please check partition value or versionNum is right")
-    }
-
+    dbManager.rollbackPartitionByVersion(table_id, range_value, toVersion);
   }
 
   def updateTableSchema(table_name: String,

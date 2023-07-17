@@ -26,8 +26,10 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 public class DataCommitInfoDao {
 
@@ -42,7 +44,7 @@ public class DataCommitInfoDao {
                             " values (?, ?, ?, ?, ?, ?, ?)");
             dataCommitInsert(pstmt, dataCommitInfo);
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
         } finally {
             DBConnector.closeConn(pstmt, conn);
         }
@@ -60,7 +62,7 @@ public class DataCommitInfoDao {
             pstmt.setString(3, commitId.toString());
             pstmt.execute();
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
         } finally {
             DBConnector.closeConn(pstmt, conn);
         }
@@ -72,15 +74,21 @@ public class DataCommitInfoDao {
         if (commitIdList.size() < 1) {
             return;
         }
-        String uuidListString = DBUtil.changeUUIDListToString(commitIdList);
-        String sql = String.format("delete from data_commit_info where table_id = '%s' and partition_desc = '%s' and " +
-                "commit_id in (%s)", tableId, partitionDesc, uuidListString);
+
+        String sql = String.format("delete from data_commit_info where table_id = ? and partition_desc = ? and " +
+                "commit_id in (%s)", String.join(",", Collections.nCopies(commitIdList.size(), "?")));
         try {
             conn = DBConnector.getConn();
             pstmt = conn.prepareStatement(sql);
+            pstmt.setString(1, tableId);
+            pstmt.setString(2, partitionDesc);
+            int index = 3;
+            for (UUID uuid : commitIdList) {
+                pstmt.setString(index++, uuid.toString());
+            }
             pstmt.execute();
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
         } finally {
             DBConnector.closeConn(pstmt, conn);
         }
@@ -97,7 +105,7 @@ public class DataCommitInfoDao {
             pstmt.setString(2, partitionDesc);
             pstmt.execute();
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
         } finally {
             DBConnector.closeConn(pstmt, conn);
         }
@@ -113,7 +121,7 @@ public class DataCommitInfoDao {
             pstmt.setString(1, tableId);
             pstmt.execute();
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
         } finally {
             DBConnector.closeConn(pstmt, conn);
         }
@@ -123,20 +131,22 @@ public class DataCommitInfoDao {
         Connection conn = null;
         PreparedStatement pstmt = null;
         ResultSet rs = null;
-        String sql = String.format(
-                "select * from data_commit_info where table_id = '%s' and partition_desc = '%s' and " +
-                        "commit_id = '%s'", tableId, partitionDesc, commitId);
+        String sql = "select * from data_commit_info where table_id = ? and partition_desc = ? and " +
+                "commit_id = ?";
         DataCommitInfo dataCommitInfo = null;
         try {
             conn = DBConnector.getConn();
             pstmt = conn.prepareStatement(sql);
+            pstmt.setString(1, tableId);
+            pstmt.setString(2, partitionDesc);
+            pstmt.setString(3, commitId.toString());
             rs = pstmt.executeQuery();
             while (rs.next()) {
                 dataCommitInfo = new DataCommitInfo();
                 createDataCommitInfoFromRs(rs, dataCommitInfo);
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
         } finally {
             DBConnector.closeConn(rs, pstmt, conn);
         }
@@ -160,7 +170,7 @@ public class DataCommitInfoDao {
                 createDataCommitInfoFromRs(rs, dataCommitInfo);
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
         } finally {
             DBConnector.closeConn(rs, pstmt, conn);
         }
@@ -176,20 +186,21 @@ public class DataCommitInfoDao {
         if (commitIdList.size() < 1) {
             return commitInfoList;
         }
-        String uuidListString = DBUtil.changeUUIDListToString(commitIdList);
-        String uuidListOrderString = DBUtil.changeUUIDListToOrderString(commitIdList);
-        String sql = String.format(
-                "select * from data_commit_info where table_id = '%s' and partition_desc = '%s' and " +
-                        "commit_id in (%s) order by position(commit_id::text in '%s') ", tableId, partitionDesc,
-                uuidListString, uuidListOrderString);
-//        String sql = String.format("select * from data_commit_info where table_id = '%s' and partition_desc = '%s'
-//        and " +
-//                "commit_id in (%s) order by array_positions(array['%s'],commit_id::text) ", tableId, partitionDesc,
-//                uuidListString, uuidListOrderString);
+        String uuidListOrderString = commitIdList.stream().map(UUID::toString).collect(Collectors.joining(","));
+        String sql = String.format("select * from data_commit_info where table_id = ? and partition_desc = ? and " +
+                "commit_id in (%s) order by position(commit_id::text in ?) ", String.join(",", Collections.nCopies(commitIdList.size(), "?")));
 
         try {
             conn = DBConnector.getConn();
             pstmt = conn.prepareStatement(sql);
+            pstmt.setString(1, tableId);
+            pstmt.setString(2, partitionDesc);
+            int index = 3;
+            for (UUID uuid : commitIdList) {
+                pstmt.setString(index++, uuid.toString());
+            }
+            pstmt.setString(index, uuidListOrderString);
+
             rs = pstmt.executeQuery();
             while (rs.next()) {
                 DataCommitInfo dataCommitInfo = new DataCommitInfo();
@@ -197,7 +208,7 @@ public class DataCommitInfoDao {
                 commitInfoList.add(dataCommitInfo);
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
         } finally {
             DBConnector.closeConn(rs, pstmt, conn);
         }
@@ -230,7 +241,6 @@ public class DataCommitInfoDao {
             }
             conn.commit();
         } catch (SQLException e) {
-            result = false;
             try {
                 if (conn != null) {
                     conn.rollback();
@@ -238,7 +248,7 @@ public class DataCommitInfoDao {
             } catch (SQLException ex) {
                 ex.printStackTrace();
             }
-            e.printStackTrace();
+            throw new RuntimeException(e);
         } finally {
             DBConnector.closeConn(pstmt, conn);
         }
@@ -265,7 +275,7 @@ public class DataCommitInfoDao {
             pstmt = conn.prepareStatement(sql);
             pstmt.execute();
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
         } finally {
             DBConnector.closeConn(pstmt, conn);
         }
