@@ -62,11 +62,12 @@ import scala.Option;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static com.dmetasoul.lakesoul.meta.DBConfig.LAKESOUL_RANGE_PARTITION_SPLITTER;
 import static java.time.ZoneId.SHORT_IDS;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.*;
 import static org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM;
@@ -176,8 +177,7 @@ public class FlinkUtil {
     }
 
     public static LogicalType fromNameToLogicalType(String type, int precision, int scale, boolean nullable) {
-        String trimType = type.toLowerCase(Locale.ROOT).trim();
-        switch (trimType) {
+        switch (type) {
             case "boolean":
                 return new BooleanType(nullable);
             case "bit":
@@ -186,6 +186,7 @@ public class FlinkUtil {
             case "blob":
             case "tinyblob":
             case "mediumblob":
+            case "longblob":
                 return new BinaryType(nullable, Integer.MAX_VALUE);
             case "bigint":
                 return new BigIntType(nullable);
@@ -501,5 +502,10 @@ public class FlinkUtil {
         map.put(HASH_BUCKET_NUM.key(), String.valueOf(conf.getInteger(BUCKET_PARALLELISM)));
         map.put(CDC_CHANGE_COLUMN, conf.getString(CDC_CHANGE_COLUMN, CDC_CHANGE_COLUMN_DEFAULT));
         return new JSONObject(map);
+    }
+
+    public static DateTimeFormatter DP_Kafka_DateTimeFormatter;
+    static {
+        DP_Kafka_DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS");
     }
 }

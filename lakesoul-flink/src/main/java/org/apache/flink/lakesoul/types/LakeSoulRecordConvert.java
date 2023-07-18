@@ -44,6 +44,7 @@ import io.debezium.time.Year;
 import io.debezium.time.ZonedTime;
 import io.debezium.time.ZonedTimestamp;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.formats.common.TimeFormats;
 import org.apache.flink.formats.json.JsonToRowDataConverters;
 import org.apache.flink.lakesoul.tool.FlinkUtil;
 import org.apache.flink.lakesoul.tool.LakeSoulKeyGen;
@@ -58,7 +59,6 @@ import org.apache.flink.types.RowKind;
 import java.io.Serializable;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
-import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -68,11 +68,13 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TimeZone;
 
-import static org.apache.flink.formats.common.TimestampFormat.SQL;
+import static org.apache.flink.formats.common.TimestampFormat.ISO_8601;
+import static org.apache.flink.lakesoul.tool.FlinkUtil.DP_Kafka_DateTimeFormatter;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.CDC_CHANGE_COLUMN;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.CDC_CHANGE_COLUMN_DEFAULT;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.SORT_FIELD;
@@ -105,7 +107,7 @@ public class LakeSoulRecordConvert implements Serializable {
 
         properties = FlinkUtil.getPropertiesFromConfiguration(conf);
 
-        converter = new JsonToRowDataConverters(true, false, SQL);
+        converter = new JsonToRowDataConverters(true, false, ISO_8601);
         sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
         sdf.setTimeZone(TimeZone.getTimeZone(serverTimeZone));
     }
@@ -790,7 +792,7 @@ public class LakeSoulRecordConvert implements Serializable {
             String[] colDefine = fieldStr.split(" ");
             String nameAndType = colDefine[0];
             String colName = nameAndType.split(":")[0];
-            String colType = nameAndType.split(":")[1];
+            String colType = nameAndType.split(":")[1].toLowerCase(Locale.ROOT).trim();
             int precision = 0;
             if (colDefine.length > 1) {
                 precision = Integer.parseInt(colDefine[1].split(":")[1]);
@@ -805,14 +807,10 @@ public class LakeSoulRecordConvert implements Serializable {
             }
             fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale, nullable)));
             if (colType.equals("timestamp") || colType.equals("datetime")) {
-                try {
-                    String value = valueNode.get(colName).asText();
-                    java.util.Date dateValue = sdf.parse(value);
-                    Instant instant = TimestampData.fromEpochMillis(dateValue.getTime()).toInstant();
-                    valueNode.put(colName, instant.toString().replace("T", " "));
-                } catch (ParseException e) {
-                    e.printStackTrace();
-                }
+                String value = valueNode.get(colName).asText();
+                ZonedDateTime zonedDateTime = LocalDateTime.parse(value, DP_Kafka_DateTimeFormatter).atZone(serverTimeZone);
+                valueNode.put(colName, zonedDateTime.toInstant().toString());
+
             }
         }
         fields.add(new RowType.RowField(SORT_FIELD, new BigIntType(true)));
