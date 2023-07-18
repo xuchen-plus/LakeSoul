@@ -44,7 +44,6 @@ import io.debezium.time.Year;
 import io.debezium.time.ZonedTime;
 import io.debezium.time.ZonedTimestamp;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.formats.common.TimeFormats;
 import org.apache.flink.formats.json.JsonToRowDataConverters;
 import org.apache.flink.lakesoul.tool.FlinkUtil;
 import org.apache.flink.lakesoul.tool.LakeSoulKeyGen;
@@ -93,7 +92,6 @@ public class LakeSoulRecordConvert implements Serializable {
     private final JSONObject properties;
 
     JsonToRowDataConverters converter;
-    SimpleDateFormat sdf;
 
     public LakeSoulRecordConvert(Configuration conf, String serverTimeZone) {
         this(conf, serverTimeZone, Collections.emptyList());
@@ -108,8 +106,6 @@ public class LakeSoulRecordConvert implements Serializable {
         properties = FlinkUtil.getPropertiesFromConfiguration(conf);
 
         converter = new JsonToRowDataConverters(true, false, ISO_8601);
-        sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-        sdf.setTimeZone(TimeZone.getTimeZone(serverTimeZone));
     }
 
     private boolean partitionFieldsChanged(RowType beforeType, RowData beforeData, RowType afterType, RowData afterData) {
