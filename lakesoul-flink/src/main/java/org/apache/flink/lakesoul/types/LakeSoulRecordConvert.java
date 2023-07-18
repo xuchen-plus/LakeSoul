@@ -58,7 +58,6 @@ import org.apache.flink.types.RowKind;
 import java.io.Serializable;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
-import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -70,7 +69,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.TimeZone;
 
 import static org.apache.flink.formats.common.TimestampFormat.ISO_8601;
 import static org.apache.flink.lakesoul.tool.FlinkUtil.DP_Kafka_DateTimeFormatter;
