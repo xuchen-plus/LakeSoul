@@ -71,7 +71,7 @@ public class KafkaCdc {
         int sourceParallelism = parameter.getInt(SOURCE_PARALLELISM.key(), 1);
         int sinkParallelism = parameter.getInt(BUCKET_PARALLELISM.key(), 1);
         int checkpointInterval = parameter.getInt(JOB_CHECKPOINT_INTERVAL.key(), JOB_CHECKPOINT_INTERVAL.defaultValue());
-        boolean logicallyDropColumn = parameter.getBoolean(LOGICALLY_DROP_COLUM.key(), false);
+        boolean logicallyDropColumn = parameter.getBoolean(LOGICALLY_DROP_COLUM.key(), true);
         String serverTimezone = parameter.get(SERVER_TIME_ZONE.key(), SERVER_TIME_ZONE.defaultValue());
 
         //about security
