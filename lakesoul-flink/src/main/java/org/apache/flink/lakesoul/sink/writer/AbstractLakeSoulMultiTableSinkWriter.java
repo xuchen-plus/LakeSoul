@@ -165,6 +165,10 @@ public abstract class AbstractLakeSoulMultiTableSinkWriter<IN>
 
     protected abstract List<Tuple2<TableSchemaIdentity, RowData>> extractTableSchemaAndRowData(IN element) throws Exception;
 
+    protected long getDataDmlTsMs(IN element) {
+        return 0l;
+    }
+
     @Override
     public void write(IN element, Context context) throws IOException {
         if (element == null) {
@@ -177,6 +181,7 @@ public abstract class AbstractLakeSoulMultiTableSinkWriter<IN>
                 processingTimeService.getCurrentProcessingTime());
 
         List<Tuple2<TableSchemaIdentity, RowData>> schemaAndRowDatas;
+        long dataDmlTsMs = getDataDmlTsMs(element);
         try {
             schemaAndRowDatas = extractTableSchemaAndRowData(element);
         } catch (Exception e) {
@@ -188,7 +193,7 @@ public abstract class AbstractLakeSoulMultiTableSinkWriter<IN>
             TableSchemaWriterCreator creator = getOrCreateTableSchemaWriterCreator(identity);
             final String bucketId = creator.bucketAssigner.getBucketId(rowData, bucketerContext);
             final LakeSoulWriterBucket bucket = getOrCreateBucketForBucketId(identity, bucketId, creator);
-            bucket.write(rowData, processingTimeService.getCurrentProcessingTime());
+            bucket.write(rowData, processingTimeService.getCurrentProcessingTime(), dataDmlTsMs);
             recordsOutCounter.inc();
         }
     }

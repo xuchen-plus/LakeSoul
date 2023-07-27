@@ -18,7 +18,6 @@
 
 package org.apache.flink.lakesoul.sink.state;
 
-import org.apache.commons.lang.NotImplementedException;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.core.io.SimpleVersionedSerialization;
 import org.apache.flink.core.io.SimpleVersionedSerializer;
@@ -27,7 +26,6 @@ import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputSerializer;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.lakesoul.types.TableSchemaIdentity;
-import org.apache.flink.streaming.api.functions.sink.filesystem.InProgressFileWriter;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -35,7 +33,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 

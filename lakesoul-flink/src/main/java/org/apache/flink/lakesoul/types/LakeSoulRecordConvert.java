@@ -145,7 +145,7 @@ public class LakeSoulRecordConvert implements Serializable {
         return false;
     }
 
-    public LakeSoulRowDataWrapper toLakeSoulDataType(Schema sch, Struct value, TableId tableId, long sortField) throws Exception {
+    public LakeSoulRowDataWrapper toLakeSoulDataType(Schema sch, Struct value, TableId tableId, long tsMs, long sortField) throws Exception {
         Envelope.Operation op = getOperation(sch, value);
         Schema valueSchema = value.schema();
         LakeSoulRowDataWrapper.Builder builder = LakeSoulRowDataWrapper.newBuilder().setTableId(tableId).setProperties(properties);
@@ -185,7 +185,7 @@ public class LakeSoulRecordConvert implements Serializable {
             }
         }
 
-        return builder.build();
+        return builder.setTsMs(tsMs).build();
     }
 
     public RowType toFlinkRowTypeCDC(RowType rowType) {
@@ -686,7 +686,7 @@ public class LakeSoulRecordConvert implements Serializable {
 
     public LakeSoulRowDataWrapper kafkaToLakeSoulDataType(JsonNode beforeJsonNode, String beforeTypeStr, JsonNode afterJsonNode,
                                                           String afterTypeStr, String opType, TableId tableId, List<String> keyList,
-                                                          long sortField) {
+                                                          long tsMs, long sortField) {
 
         LakeSoulRowDataWrapper.Builder builder = LakeSoulRowDataWrapper.newBuilder().setTableId(tableId);
         String op = getOPType(opType);
@@ -741,8 +741,7 @@ public class LakeSoulRecordConvert implements Serializable {
                         .setAfterRowData(afterRowData).setAfterType(afterRowType);
             }
         }
-
-        return builder.build();
+        return builder.setTsMs(tsMs).build();
     }
 
     private String getOPType(String opType) {

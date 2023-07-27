@@ -29,17 +29,19 @@ public class LakeSoulRowDataWrapper {
     RowData after;
     RowType beforeType;
     RowType afterType;
+    long tsMs;
 
     JSONObject properties;
 
     public LakeSoulRowDataWrapper(TableId tableId, String op, RowData before, RowData after, RowType beforeType,
-                                  RowType afterType, JSONObject properties) {
+                                  RowType afterType, long rsMs, JSONObject properties) {
         this.tableId = tableId;
         this.op = op;
         this.before = before;
         this.after = after;
         this.beforeType = beforeType;
         this.afterType = afterType;
+        this.tsMs = rsMs;
         this.properties = properties;
     }
 
@@ -67,6 +69,10 @@ public class LakeSoulRowDataWrapper {
         return op;
     }
 
+    public long getTsMs() {
+        return tsMs;
+    }
+
     public JSONObject getProperties() {
         return properties;
     }
@@ -80,6 +86,7 @@ public class LakeSoulRowDataWrapper {
                 ", after=" + after +
                 ", beforeType=" + beforeType +
                 ", afterType=" + afterType +
+                ", tsMs=" + tsMs +
                 ", properties=" + properties +
                 '}';
     }
@@ -95,6 +102,7 @@ public class LakeSoulRowDataWrapper {
         RowData after;
         RowType beforeType;
         RowType afterType;
+        long tsMs;
 
         JSONObject properties;
 
@@ -128,6 +136,11 @@ public class LakeSoulRowDataWrapper {
             return this;
         }
 
+        public Builder setTsMs(long tsMs) {
+            this.tsMs = tsMs;
+            return this;
+        }
+
         public Builder setProperties(JSONObject properties) {
             this.properties = properties;
             return this;
@@ -135,7 +148,7 @@ public class LakeSoulRowDataWrapper {
 
         public LakeSoulRowDataWrapper build() {
             return new LakeSoulRowDataWrapper(this.tableId, this.op, this.before, this.after, this.beforeType,
-                    this.afterType, this.properties);
+                    this.afterType, this.tsMs, this.properties);
         }
     }
 }

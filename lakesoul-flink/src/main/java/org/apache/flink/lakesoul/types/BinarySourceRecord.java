@@ -103,6 +103,7 @@ public class BinarySourceRecord {
             Field sourceField = valueSchema.field(Envelope.FieldName.SOURCE);
             long binlogFileIndex = 0;
             long binlogPosition = 0;
+            long tsMs = 0;
             Struct source = value.getStruct(Envelope.FieldName.SOURCE);
             if (sourceField != null && source != null) {
                 if (sourceField.schema().field("file") != null) {
@@ -114,10 +115,12 @@ public class BinarySourceRecord {
                 if (sourceField.schema().field("pos") != null) {
                     binlogPosition = (Long) source.getWithoutDefault("pos");
                 }
-
+                if (sourceField.schema().field("ts_ms") != null) {
+                    tsMs = (Long) source.getWithoutDefault("ts_ms");
+                }
             }
             long sortField = (binlogFileIndex << 32) + binlogPosition;
-            LakeSoulRowDataWrapper data = convert.toLakeSoulDataType(valueSchema, value, tableId, sortField);
+            LakeSoulRowDataWrapper data = convert.toLakeSoulDataType(valueSchema, value, tableId, tsMs, sortField);
             String tablePath = new Path(new Path(basePath, tableId.schema()), tableId.table()).toString();
 
             return new BinarySourceRecord(sourceRecord.topic(), primaryKeys, tableId, FlinkUtil.makeQualifiedPath(tablePath).toString(),
@@ -155,9 +158,11 @@ public class BinarySourceRecord {
         JsonNode source = valueNode.get("source");
         String databaseName = source.get("schema").asText();
         String tableName = source.get("table").asText();
+
         TableId tableId = new TableId("lakesoul", databaseName, tableName);
 
         String opType = valueNode.get("op").asText();
+        long tsMs = valueNode.get("ts_ms").asLong();
         String beforeTypeStr = null;
         JsonNode before = valueNode.get("before");
         if (before != null) {
@@ -171,7 +176,7 @@ public class BinarySourceRecord {
 
         long sortField = offset;
 
-        LakeSoulRowDataWrapper data = convert.kafkaToLakeSoulDataType(before, beforeTypeStr, after, afterTypeStr, opType, tableId, keyList, sortField);
+        LakeSoulRowDataWrapper data = convert.kafkaToLakeSoulDataType(before, beforeTypeStr, after, afterTypeStr, opType, tableId, keyList, tsMs, sortField);
         String tablePath = new Path(new Path(basePath, tableId.schema()), tableId.table()).toString();
 
         return new BinarySourceRecord(tableId.toString(), keyList, tableId, FlinkUtil.makeQualifiedPath(tablePath).toString(),
