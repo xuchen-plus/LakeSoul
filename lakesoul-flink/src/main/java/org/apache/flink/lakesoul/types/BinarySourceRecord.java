@@ -148,8 +148,8 @@ public class BinarySourceRecord {
 //                keyList.add(elements.next().asText());
 //            }
 //        }
-//        JsonNode pkValue = keyNode.get("pk_value");
-        Iterator<String> pkIterator = keyNode.fieldNames();
+        JsonNode pkValue = keyNode.get("pk_value");
+        Iterator<String> pkIterator = pkValue.fieldNames();
         while (pkIterator.hasNext()) {
             String keyName = pkIterator.next();
             keyList.add(keyName);
