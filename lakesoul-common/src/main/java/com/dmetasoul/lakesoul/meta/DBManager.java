@@ -115,7 +115,7 @@ public class DBManager {
         tableInfo.setTablePath(tablePath);
         tableInfo.setTableSchema(tableSchema);
         tableInfo.setPartitions(partitions);
-        properties.put(DBConfig.TableInfoProperty.LAST_TABLE_SCHEMA_CHANGE_TIME, System.currentTimeMillis());
+        properties.put(DBConfig.TableInfoProperty.LAST_TABLE_SCHEMA_CHANGE_TIME, String.valueOf(System.currentTimeMillis()));
         tableInfo.setProperties(properties);
 
         if (StringUtils.isNotBlank(tableName)) {
@@ -250,7 +250,7 @@ public class DBManager {
         TableInfo tableInfo = tableInfoDao.selectByTableId(tableId);
         tableInfo.setTableSchema(tableSchema);
         JSONObject propertiesJson = tableInfo.getProperties();
-        propertiesJson.put(DBConfig.TableInfoProperty.LAST_TABLE_SCHEMA_CHANGE_TIME, System.currentTimeMillis());
+        propertiesJson.put(DBConfig.TableInfoProperty.LAST_TABLE_SCHEMA_CHANGE_TIME, String.valueOf(System.currentTimeMillis()));
         tableInfoDao.updateByTableId(tableId, "", "", tableSchema);
         tableInfoDao.updatePropertiesById(tableId, propertiesJson);
     }
@@ -280,7 +280,7 @@ public class DBManager {
     public void modifySchemaChangeTime(String tableId) {
         TableInfo tableInfo = tableInfoDao.selectByTableId(tableId);
         JSONObject propertiesJson = tableInfo.getProperties();
-        propertiesJson.put(DBConfig.TableInfoProperty.LAST_TABLE_SCHEMA_CHANGE_TIME, System.currentTimeMillis());
+        propertiesJson.put(DBConfig.TableInfoProperty.LAST_TABLE_SCHEMA_CHANGE_TIME, String.valueOf(System.currentTimeMillis()));
         tableInfoDao.updatePropertiesById(tableId, propertiesJson);
     }
 
