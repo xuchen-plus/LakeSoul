@@ -63,6 +63,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
@@ -803,7 +804,9 @@ public class LakeSoulRecordConvert implements Serializable {
                 String value = valueNode.get(colName).asText();
                 ZonedDateTime zonedDateTime = LocalDateTime.parse(value, DP_Kafka_DateTimeFormatter).atZone(serverTimeZone);
                 valueNode.put(colName, zonedDateTime.toInstant().toString());
-
+            } else if (colType.endsWith("blob") || colType.endsWith("binary") || colType.equals("bit")) {
+                String value = valueNode.get(colName).asText();
+                valueNode.put(colName, Base64.getDecoder().decode(value));
             }
         }
         fields.add(new RowType.RowField(SORT_FIELD, new BigIntType(true)));

@@ -148,8 +148,8 @@ public class BinarySourceRecord {
 //                keyList.add(elements.next().asText());
 //            }
 //        }
-        JsonNode pkValue = keyNode.get("pk_value");
-        Iterator<String> pkIterator = pkValue.fieldNames();
+//        JsonNode pkValue = keyNode.get("pk_value");
+        Iterator<String> pkIterator = keyNode.fieldNames();
         while (pkIterator.hasNext()) {
             String keyName = pkIterator.next();
             keyList.add(keyName);
@@ -162,7 +162,7 @@ public class BinarySourceRecord {
         TableId tableId = new TableId("lakesoul", databaseName, tableName);
 
         String opType = valueNode.get("op").asText();
-        long tsMs = valueNode.get("ts_ms").asLong();
+        long tsMs = source.get("ts_ms").asLong();
         String beforeTypeStr = null;
         JsonNode before = valueNode.get("before");
         if (before != null) {
