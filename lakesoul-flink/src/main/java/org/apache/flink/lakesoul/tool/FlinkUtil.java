@@ -175,7 +175,7 @@ public class FlinkUtil {
         return null;
     }
 
-    public static LogicalType fromNameToLogicalType(String type, int precision, int scale, boolean nullable) {
+    public static LogicalType fromNameToLogicalType(String type, int precision, int scale, boolean nullable, boolean unsigned) {
         switch (type) {
             case "boolean":
                 return new BooleanType(nullable);
@@ -190,15 +190,20 @@ public class FlinkUtil {
             case "bigint":
                 return new BigIntType(nullable);
             case "int":
-            case "tinyint":
-            case "smallint":
             case "integer":
             case "mediumint":
+                if (unsigned) return new BigIntType(nullable);
+            case "tinyint":
+            case "smallint":
                 return new IntType(nullable);
+            case "float":
+                if (unsigned) {
+                    return new DoubleType(nullable);
+                } else {
+                    return new FloatType(nullable);
+                }
             case "double":
                 return new DoubleType(nullable);
-            case "float":
-                return new FloatType(nullable);
             case "date":
                 return new DateType(nullable);
             case "datetime":

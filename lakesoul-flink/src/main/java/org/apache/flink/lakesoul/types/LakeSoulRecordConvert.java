@@ -783,6 +783,11 @@ public class LakeSoulRecordConvert implements Serializable {
     public RowType jsonToRowType(String[] fieldTypeArray, ObjectNode valueNode, List<String> keyList) {
         List<RowType.RowField> fields = new ArrayList();
         for (String fieldStr : fieldTypeArray) {
+            boolean unsigned = false;
+            if (fieldStr.contains("UNSIGNED") || fieldStr.contains("unsigned")) {
+                unsigned = true;
+                fieldStr = fieldStr.replace("UNSIGNED ", "").replace("unsigned ", "");
+            }
             String[] colDefine = fieldStr.split(" ");
             String nameAndType = colDefine[0];
             String colName = nameAndType.split(":")[0];
@@ -799,7 +804,7 @@ public class LakeSoulRecordConvert implements Serializable {
             if (keyList.contains(colName)) {
                 nullable = false;
             }
-            fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale, nullable)));
+            fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale, nullable, unsigned)));
             if (colType.equals("timestamp") || colType.equals("datetime")) {
                 String value = valueNode.get(colName).asText();
                 ZonedDateTime zonedDateTime = LocalDateTime.parse(value, DP_Kafka_DateTimeFormatter).atZone(serverTimeZone);
