@@ -30,6 +30,7 @@ import org.apache.flink.core.fs.Path;
 import org.apache.flink.lakesoul.tool.FlinkUtil;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import java.util.ArrayList;
@@ -148,8 +149,8 @@ public class BinarySourceRecord {
 //                keyList.add(elements.next().asText());
 //            }
 //        }
-        JsonNode pkValue = keyNode.get("pk_value");
-        Iterator<String> pkIterator = pkValue.fieldNames();
+//        JsonNode pkValue = keyNode.get("pk_value");
+        Iterator<String> pkIterator = keyNode.fieldNames();
         while (pkIterator.hasNext()) {
             String keyName = pkIterator.next();
             keyList.add(keyName);
@@ -166,12 +167,14 @@ public class BinarySourceRecord {
         String beforeTypeStr = null;
         JsonNode before = valueNode.get("before");
         if (before != null) {
-            beforeTypeStr = valueNode.get("before_field_type").asText();
+            beforeTypeStr = before.get("field_type").asText();
+            ((ObjectNode) before).remove("field_type");
         }
         String afterTypeStr = null;
         JsonNode after = valueNode.get("after");
         if (after != null) {
-            afterTypeStr = valueNode.get("after_field_type").asText();
+            afterTypeStr = after.get("field_type").asText();
+            ((ObjectNode) after).remove("field_type");
         }
 
         long sortField = offset;
