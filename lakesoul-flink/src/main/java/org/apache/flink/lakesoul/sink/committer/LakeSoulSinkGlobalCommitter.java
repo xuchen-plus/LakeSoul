@@ -167,6 +167,9 @@ public class LakeSoulSinkGlobalCommitter
                     }
                 } else if (!equalOrCanCast.equals(DataTypeCastUtils.IS_EQUAL())) {
                     long schemaLastChangeTime = tableInfo.getProperties().getLong(DBConfig.TableInfoProperty.LAST_TABLE_SCHEMA_CHANGE_TIME);
+                    if (equalOrCanCast.contains("Change of Partition Column") || equalOrCanCast.contains("Change of Primary Key Column")) {
+                        throw new IOException(equalOrCanCast);
+                    }
                     for (LakeSoulMultiTableSinkCommittable committable : lakeSoulMultiTableSinkCommittable) {
                         if (committable.getTsMs() > schemaLastChangeTime) {
                             LOG.error("incompatible cast data created and delayThreshold time: {}, dml create time: {}", schemaLastChangeTime, committable.getTsMs());

@@ -166,7 +166,7 @@ public abstract class AbstractLakeSoulMultiTableSinkWriter<IN>
     protected abstract List<Tuple2<TableSchemaIdentity, RowData>> extractTableSchemaAndRowData(IN element) throws Exception;
 
     protected long getDataDmlTsMs(IN element) {
-        return 0l;
+        return Long.MAX_VALUE;
     }
 
     @Override
