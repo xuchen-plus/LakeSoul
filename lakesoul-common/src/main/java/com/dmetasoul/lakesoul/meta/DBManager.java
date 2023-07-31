@@ -277,10 +277,10 @@ public class DBManager {
         tableInfoDao.updatePropertiesById(tableId, propertiesJson);
     }
 
-    public void modifySchemaChangeTime(String tableId) {
+    public void removeLogicallyDropColumn(String tableId) {
         TableInfo tableInfo = tableInfoDao.selectByTableId(tableId);
         JSONObject propertiesJson = tableInfo.getProperties();
-        propertiesJson.put(DBConfig.TableInfoProperty.LAST_TABLE_SCHEMA_CHANGE_TIME, String.valueOf(System.currentTimeMillis()));
+        propertiesJson.remove(DBConfig.TableInfoProperty.DROPPED_COLUMN);
         tableInfoDao.updatePropertiesById(tableId, propertiesJson);
     }
 

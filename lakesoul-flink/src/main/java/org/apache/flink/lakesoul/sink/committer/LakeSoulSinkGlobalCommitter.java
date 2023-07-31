@@ -164,6 +164,9 @@ public class LakeSoulSinkGlobalCommitter
                         }
                     } else {
                         dbManager.updateTableSchema(tableInfo.getTableId(), msgSchema.json());
+                        if (tableInfo.getProperties().containsKey(DBConfig.TableInfoProperty.DROPPED_COLUMN)) {
+                            dbManager.removeLogicallyDropColumn(tableInfo.getTableId());
+                        }
                     }
                 } else if (!equalOrCanCast.equals(DataTypeCastUtils.IS_EQUAL())) {
                     long schemaLastChangeTime = tableInfo.getProperties().getLong(DBConfig.TableInfoProperty.LAST_TABLE_SCHEMA_CHANGE_TIME);
