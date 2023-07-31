@@ -28,7 +28,7 @@ public class AuthZEnforcer {
     private static final Logger LOG = LoggerFactory.getLogger(AuthZEnforcer.class);
     private static AuthZEnforcer instance = null;
 
-    public SyncedEnforcer enforcer;
+    private SyncedEnforcer enforcer;
 
     public static synchronized SyncedEnforcer get() {
         if (GlobalConfig.get().isAuthZEnabled()) {
@@ -45,11 +45,6 @@ public class AuthZEnforcer {
         return !(get() == null);
     }
 
-    private DataSource ds;
-
-    private void initDataSource() {
-        ds = DBConnector.getDS();
-    }
 
     private void initEnforcer() throws Exception {
         String modelValue = GlobalConfig.get().getAuthZCasbinModel();
@@ -57,7 +52,7 @@ public class AuthZEnforcer {
         model.loadModelFromText(modelValue);
 
         // init casbin jdbc adapter
-        JDBCAdapter a = new JDBCAdapter(ds, true, "casbin_rule", false);
+        JDBCAdapter a = new JDBCAdapter(DBConnector.getDS(), true, "casbin_rule", false);
 
         enforcer = new SyncedEnforcer(model, a);
         LOG.info("Casbin enforcer successfully initialized");
@@ -65,7 +60,6 @@ public class AuthZEnforcer {
 
     private AuthZEnforcer() {
         try {
-            initDataSource();
             initEnforcer();
         } catch (Throwable e) {
             e.printStackTrace();

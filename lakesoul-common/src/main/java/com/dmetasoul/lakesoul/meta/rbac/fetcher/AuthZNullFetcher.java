@@ -1,4 +1,3 @@
-package com.dmetasoul.lakesoul.meta.rbac;
 /*
  * Copyright [2022] [DMetaSoul Team]
  *
@@ -16,9 +15,21 @@ package com.dmetasoul.lakesoul.meta.rbac;
  *
  */
 
+package com.dmetasoul.lakesoul.meta.rbac.fetcher;
 
-public class AuthZException extends RuntimeException {
-    public AuthZException(){
-        super("lakesoul access denied!");
+import org.aspectj.lang.JoinPoint;
+
+import java.util.LinkedList;
+import java.util.List;
+
+public class AuthZNullFetcher implements AuthZFetcher<JoinPoint> {
+    @Override
+    public List<String> getObject(JoinPoint point) {
+        return new LinkedList<>();
     }
 }
+
+
+
+
+

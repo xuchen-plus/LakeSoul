@@ -22,6 +22,9 @@ import com.alibaba.fastjson.JSONObject;
 import com.dmetasoul.lakesoul.meta.DBConnector;
 import com.dmetasoul.lakesoul.meta.DBUtil;
 import com.dmetasoul.lakesoul.meta.entity.Namespace;
+import com.dmetasoul.lakesoul.meta.rbac.AuthZContext;
+import com.dmetasoul.lakesoul.meta.rbac.AuthZEnforcer;
+import dev.failsafe.internal.util.Lists;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -146,3 +149,4 @@ public class NamespaceDao {
         }
     }
 }
+

@@ -176,6 +176,7 @@
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-json</artifactId>
             <version>${flink.version}</version>
+            <scope>test</scope>
         </dependency>
 
 
@@ -218,6 +219,12 @@
             <artifactId>flink-table-api-java-bridge_2.12</artifactId>
             <version>${flink.version}</version>
             <scope>${local.scope}</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.parquet</groupId>
+            <artifactId>parquet-column</artifactId>
+            <version>1.12.2</version>
         </dependency>
 
         <dependency>
@@ -302,6 +309,10 @@
                     <groupId>com.fasterxml.jackson.core</groupId>
                     <artifactId>*</artifactId>
                 </exclusion>
+                <exclusion>
+                    <groupId>org.apache.zookeeper</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <dependency>
@@ -355,7 +366,7 @@
             <exclusions>
                 <exclusion>
                     <groupId>org.apache.parquet</groupId>
-                    <artifactId>parquet-hadoop</artifactId>
+                    <artifactId>*</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>org.apache.spark</groupId>
@@ -465,6 +476,8 @@
                             <include>com.github.jnr:*</include>
                             <include>org.ow2.asm:*</include>
                             <include>org.apache.arrow:*</include>
+                            <include>org.apache.parquet:*</include>
+                            <include>org.apache.yetus:*</include>
                             <include>io.netty:netty-buffer</include>
                             <include>io.netty:netty-common</include>
                             <include>com.google.flatbuffers:*</include>
@@ -486,6 +499,19 @@
                             <include>com.fasterxml.jackson.module:jackson-module-scala_2.12</include>
                             <include>com.fasterxml.jackson.module:jackson-module-paranamer</include>
                             <include>com.thoughtworks.paranamer:paranamer</include>
+
+                            <!-- casbin & aspectj -->
+                            <include>org.casbin:jdbc-adapter</include>
+                            <include>org.aspectj:aspectjrt</include>
+                            <include>org.aspectj:aspectjweaver</include>
+                            <include>org.apache.commons:commons-collections4</include>
+                            <include>org.casbin:jcasbin</include>
+                            <include>com.googlecode.aviator:aviator</include>
+                            <include>com.github.seancfoley:ipaddress</include>
+                            <include>commons-io:commons-io</include>
+                            <include>org.apache.commons:commons-csv</include>
+                            <include>com.google.code.gson:gson</include>
+                            <include>dev.failsafe:failsafe</include>
                         </includes>
                         <excludes>
                             <exclude>org.apache.logging.log4j:*</exclude>
@@ -551,6 +577,14 @@
                         <relocation>
                             <pattern>org.apache.arrow.vector</pattern>
                             <shadedPattern>com.lakesoul.shaded.org.apache.arrow.vector</shadedPattern>
+                        </relocation>
+                        <relocation>
+                            <pattern>org.apache.parquet</pattern>
+                            <shadedPattern>com.lakesoul.shaded.org.apache.parquet</shadedPattern>
+                        </relocation>
+                        <relocation>
+                            <pattern>shaded.parquet</pattern>
+                            <shadedPattern>com.lakesoul.shaded.shaded.parquet</shadedPattern>
                         </relocation>
                     </relocations>
                     <transformers>

@@ -19,6 +19,7 @@ package com.dmetasoul.lakesoul.meta.dao;
 
 import com.dmetasoul.lakesoul.meta.DBConnector;
 import com.dmetasoul.lakesoul.meta.entity.PartitionInfo;
+import com.dmetasoul.lakesoul.meta.rbac.AuthZEnforcer;
 
 import java.sql.*;
 import java.util.*;

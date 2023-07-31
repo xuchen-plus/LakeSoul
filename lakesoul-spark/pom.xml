@@ -297,7 +297,9 @@
                             <reuseForks>true</reuseForks>
                             <argLine>-Xmx3000m</argLine>
                             <systemPropertyVariables>
-                                <lakesoul.pg.url>jdbc:postgresql://127.0.0.1:5432/lakesoul_test_${surefire.forkNumber}?stringtype=unspecified</lakesoul.pg.url>
+                                <lakesoul.pg.url>
+                                    jdbc:postgresql://127.0.0.1:5432/lakesoul_test_${surefire.forkNumber}?stringtype=unspecified
+                                </lakesoul.pg.url>
                             </systemPropertyVariables>
                             <workingDirectory>.test_workdir_${surefire.forkNumber}</workingDirectory>
                             <includes>
@@ -377,6 +379,19 @@
                             <include>org.postgresql:postgresql</include>
                             <include>com.alibaba:fastjson</include>
                             <include>mysql:mysql-connector-java</include>
+
+                            <!-- casbin & aspectj -->
+                            <include>org.casbin:jdbc-adapter</include>
+                            <include>org.aspectj:aspectjrt</include>
+                            <include>org.aspectj:aspectjweaver</include>
+                            <include>org.apache.commons:commons-collections4</include>
+                            <include>org.casbin:jcasbin</include>
+                            <include>com.googlecode.aviator:aviator</include>
+                            <include>com.github.seancfoley:ipaddress</include>
+                            <include>commons-io:commons-io</include>
+                            <include>org.apache.commons:commons-csv</include>
+                            <include>com.google.code.gson:gson</include>
+                            <include>dev.failsafe:failsafe</include>
                         </includes>
                     </artifactSet>
                     <filters>

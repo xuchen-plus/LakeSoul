@@ -41,12 +41,8 @@ public class TableNameIdDao {
             conn = DBConnector.getConn();
             pstmt = conn.prepareStatement(sql);
             rs = pstmt.executeQuery();
-            tableNameId = new TableNameId();
             while (rs.next()) {
-                tableNameId.setTableName(rs.getString("table_name"));
-                tableNameId.setTableId(rs.getString("table_id"));
-                tableNameId.setTableNamespace(rs.getString("table_namespace"));
-                tableNameId.setDomain(rs.getString("domain"));
+                tableNameId = tableNameIdFromResultSet(rs);
             }
         } catch (SQLException e) {
             throw new RuntimeException(e);
@@ -166,5 +162,14 @@ public class TableNameIdDao {
         } finally {
             DBConnector.closeConn(pstmt, conn);
         }
+    }
+
+    public static TableNameId tableNameIdFromResultSet(ResultSet rs) throws SQLException {
+        TableNameId tableNameId = new TableNameId();
+        tableNameId.setTableName(rs.getString("table_name"));
+        tableNameId.setTableId(rs.getString("table_id"));
+        tableNameId.setTableNamespace(rs.getString("table_namespace"));
+        tableNameId.setDomain(rs.getString("domain"));
+        return tableNameId;
     }
 }

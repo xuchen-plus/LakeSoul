@@ -1,4 +1,3 @@
-package com.dmetasoul.lakesoul.meta.rbac;
 /*
  * Copyright [2022] [DMetaSoul Team]
  *
@@ -15,10 +14,23 @@ package com.dmetasoul.lakesoul.meta.rbac;
  * limitations under the License.
  *
  */
+package com.dmetasoul.lakesoul.meta.rbac;
 
+import com.dmetasoul.lakesoul.meta.rbac.fetcher.AuthZFetcher;
+import com.dmetasoul.lakesoul.meta.rbac.fetcher.AuthZNullFetcher;
 
-public class AuthZException extends RuntimeException {
-    public AuthZException(){
-        super("lakesoul access denied!");
-    }
+import java.lang.annotation.*;
+
+@Documented
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.METHOD)
+public @interface AuthZBefore {
+    int index() default 0;
+    String name() default "";
+
+    Class<? extends AuthZFetcher> fetcher() default AuthZNullFetcher.class;
 }
+
+
+
+
