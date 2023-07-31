@@ -747,10 +747,13 @@ public class LakeSoulRecordConvert implements Serializable {
 
     private String getOPType(String opType) {
         switch (opType) {
+            case "u":
             case "U":
                 return "update";
+            case "d":
             case "D":
                 return "delete";
+            case "r":
             case "I":
             default:
                 return "insert";

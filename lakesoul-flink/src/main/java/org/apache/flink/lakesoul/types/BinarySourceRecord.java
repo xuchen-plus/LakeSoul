@@ -166,13 +166,13 @@ public class BinarySourceRecord {
         long tsMs = source.get("ts_ms").asLong();
         String beforeTypeStr = null;
         JsonNode before = valueNode.get("before");
-        if (before != null) {
+        if (!before.isEmpty() && !before.isNull()) {
             beforeTypeStr = before.get("field_type").asText();
             ((ObjectNode) before).remove("field_type");
         }
         String afterTypeStr = null;
         JsonNode after = valueNode.get("after");
-        if (after != null) {
+        if (!after.isEmpty() && !after.isNull()) {
             afterTypeStr = after.get("field_type").asText();
             ((ObjectNode) after).remove("field_type");
         }
