@@ -17,7 +17,6 @@
 
 package com.dmetasoul.lakesoul.meta;
 
-import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.dmetasoul.lakesoul.meta.dao.*;
 import com.dmetasoul.lakesoul.meta.entity.*;
@@ -28,7 +27,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 import static com.dmetasoul.lakesoul.meta.DBConfig.LAKESOUL_RANGE_PARTITION_SPLITTER;
 
@@ -125,12 +123,16 @@ public class DBManager {
         String domain = getNameSpaceDomain(namespace);
 
         if (StringUtils.isNotBlank(tableName)) {
-            tableNameIdDao.insert(new TableNameId(tableName, tableId, namespace, domain));
+            TableNameId tableNameId = new TableNameId(tableName, tableId, namespace);
+            tableNameId.setDomain(domain);
+            tableNameIdDao.insert(tableNameId);
         }
         if (StringUtils.isNotBlank(tablePath)) {
             boolean ex = false;
             try {
-                tablePathIdDao.insert(new TablePathId(tablePath, tableId, namespace, domain));
+                TablePathId tablePathId = new TablePathId(tablePath, tableId, namespace);
+                tablePathId.setDomain(domain);
+                tablePathIdDao.insert(tablePathId);
             } catch (Exception e) {
                 ex = true;
                 throw e;
@@ -280,7 +282,7 @@ public class DBManager {
         droppedColumnProperty = droppedColumnProperty == null ? "" : droppedColumnProperty;
         HashSet<String> set = new HashSet<>(Arrays.asList(droppedColumnProperty.split(DBConfig.TableInfoProperty.DROPPED_COLUMN_SPLITTER)));
         set.addAll(droppedColumn);
-        propertiesJson.put(DBConfig.TableInfoProperty.DROPPED_COLUMN, String.join(DBConfig.TableInfoProperty.DROPPED_COLUMN_SPLITTER, droppedColumn));
+        propertiesJson.put(DBConfig.TableInfoProperty.DROPPED_COLUMN, String.join(DBConfig.TableInfoProperty.DROPPED_COLUMN_SPLITTER, set));
         tableInfoDao.updatePropertiesById(tableId, propertiesJson);
     }
 
@@ -391,7 +393,7 @@ public class DBManager {
     }
 
     public boolean batchCommitDataCommitInfo(List<DataCommitInfo> listData) {
-        listData.stream().forEach(item -> item.setDomain(getTableDomain(item.getTableId())));
+        listData.forEach(item -> item.setDomain(getTableDomain(item.getTableId())));
         return dataCommitInfoDao.batchInsert(listData);
     }
 
@@ -804,7 +806,7 @@ public class DBManager {
         }
         TableInfo tableInfo = this.getTableInfoByTableId(tableId);
         if(tableInfo == null){
-            throw new IllegalStateException("target tableinfo does not exists");
+            throw new IllegalStateException("target table_info does not exists");
         }
         return getNameSpaceDomain(tableInfo.getTableNamespace());
     }
@@ -827,7 +829,7 @@ public class DBManager {
         String commitOp = dataCommitInfo.getCommitOp();
         DataCommitInfo metaCommitInfo = dataCommitInfoDao.selectByPrimaryKey(tableId, partitionDesc, commitId);
         if (metaCommitInfo != null && metaCommitInfo.isCommitted()) {
-            LOG.info("DataCommitInfo with tableId={}, commitId={} committed already", tableId, commitId.toString());
+            LOG.info("DataCommitInfo with tableId={}, commitId={} committed already", tableId, commitId);
             return;
         } else if (metaCommitInfo == null) {
             dataCommitInfo.setDomain(getTableDomain(tableId));
@@ -896,7 +898,9 @@ public class DBManager {
 
         namespaceDao.clean();
         if(!AuthZEnforcer.authZEnabled()){
-            namespaceDao.insert(new Namespace("default"));
+            Namespace namespace = new Namespace("default");
+            namespace.setDomain(AuthZContext.getInstance().getDomain());
+            namespaceDao.insert(namespace);
         }
         dataCommitInfoDao.clean();
         tableInfoDao.clean();

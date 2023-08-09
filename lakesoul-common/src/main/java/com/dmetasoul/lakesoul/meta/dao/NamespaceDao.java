@@ -19,6 +19,7 @@
 package com.dmetasoul.lakesoul.meta.dao;
 
 import com.alibaba.fastjson.JSONObject;
+import com.dmetasoul.lakesoul.meta.DBConfig;
 import com.dmetasoul.lakesoul.meta.DBConnector;
 import com.dmetasoul.lakesoul.meta.DBUtil;
 import com.dmetasoul.lakesoul.meta.entity.Namespace;
@@ -149,4 +150,3 @@ public class NamespaceDao {
         }
     }
 }
-
