@@ -4,15 +4,15 @@
 
 package com.dmetasoul.lakesoul.meta.rbac;
 
-import com.alibaba.fastjson.JSONObject;
-import com.dmetasoul.lakesoul.meta.GlobalConfig;
-import com.dmetasoul.lakesoul.meta.dao.DataCommitInfoDao;
-import com.dmetasoul.lakesoul.meta.entity.CommitOp;
-import com.dmetasoul.lakesoul.meta.entity.DataCommitInfo;
-import com.dmetasoul.lakesoul.meta.entity.DataFileOp;
-import com.dmetasoul.lakesoul.meta.entity.TableInfo;
-import org.junit.After;
-import org.junit.Test;
+//import com.alibaba.fastjson.JSONObject;
+//import com.dmetasoul.lakesoul.meta.GlobalConfig;
+//import com.dmetasoul.lakesoul.meta.dao.DataCommitInfoDao;
+//import com.dmetasoul.lakesoul.meta.entity.CommitOp;
+//import com.dmetasoul.lakesoul.meta.entity.DataCommitInfo;
+//import com.dmetasoul.lakesoul.meta.entity.DataFileOp;
+//import com.dmetasoul.lakesoul.meta.entity.TableInfo;
+//import org.junit.After;
+//import org.junit.Test;
 
 import java.util.LinkedList;
 import java.util.List;
