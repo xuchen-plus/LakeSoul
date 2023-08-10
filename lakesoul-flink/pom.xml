@@ -10,7 +10,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>lakesoul-flink</artifactId>
-    <version>2.3.0-flink-1.14-SNAPSHOT</version>
+    <version>2.3.0.5-flink-1.14-SNAPSHOT</version>
     <properties>
         <flink.version>1.14.6</flink.version>
         <scala.binary.version>2.12</scala.binary.version>
