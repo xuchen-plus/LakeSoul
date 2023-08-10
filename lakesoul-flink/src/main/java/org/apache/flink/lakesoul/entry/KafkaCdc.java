@@ -39,6 +39,9 @@ import org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
@@ -97,7 +100,9 @@ public class KafkaCdc {
                 offSet = OffsetsInitializer.earliest();
                 break;
             case "timestamp":
-                offSet = OffsetsInitializer.timestamp((Long.parseLong(startTimeStamp)));
+                long startTimeMilli = LocalDateTime.parse(startTimeStamp, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+                        .atZone(ZoneId.of(serverTimezone)).toInstant().toEpochMilli();
+                offSet = OffsetsInitializer.timestamp(startTimeMilli);
                 break;
             case "committedOffsets":
             default:
