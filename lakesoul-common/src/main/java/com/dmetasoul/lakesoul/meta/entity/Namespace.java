@@ -111,9 +111,6 @@ public class Namespace {
 
     public void setProperties(JSONObject properties) {
         this.properties = properties;
-        if (!properties.containsKey("domain")) {
-            properties.put("domain", domain);
-        }
     }
 
     public void setComment(String comment) {

@@ -110,7 +110,10 @@ public class LakeSoulRBACTest extends LakeSoulFlinkTestBase {
             throw new RuntimeException("test state was unexcepted");
         }catch (Exception e){
             System.out.println(e.getMessage());
-            assert(e.getMessage().contains("Cannot find table '`lakesoul`.`database1`.`table1`' in any of the catalogs"));
+            // in flink 1.17 InsertOperation will check table if exists in catalogs before insert in SqlToOperationConverter#convertSqlInsert,
+            // so error is 'Cannot find table '%s' in any of the catalogs %s'
+            // but flink 1.14 do not have this check, so error is 'Sink `lakesoul`.`database1`.`table1` does not exists'
+            assert(e.getMessage().contains("Sink `lakesoul`.`database1`.`table1` does not exists"));
         }
 
         try {
