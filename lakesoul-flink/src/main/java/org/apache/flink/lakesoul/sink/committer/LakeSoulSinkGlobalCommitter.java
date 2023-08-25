@@ -4,6 +4,7 @@
 
 package org.apache.flink.lakesoul.sink.committer;
 
+import com.alibaba.fastjson.JSON;
 import com.dmetasoul.lakesoul.meta.DBConfig;
 import com.dmetasoul.lakesoul.meta.DBManager;
 import com.dmetasoul.lakesoul.meta.DBUtil;
@@ -157,12 +158,12 @@ public class LakeSoulSinkGlobalCommitter
                         LOG.info("Changing table schema: {}, {}, {}, {}, {}", tableNamespace, tableName, identity.tableLocation,
                                 msgSchema, identity.properties);
                         dbManager.updateTableSchema(tableInfo.getTableId(), msgSchema.json());
-                        if (tableInfo.getProperties().containsKey(DBConfig.TableInfoProperty.DROPPED_COLUMN)) {
+                        if (JSON.parseObject(tableInfo.getProperties()).containsKey(DBConfig.TableInfoProperty.DROPPED_COLUMN)) {
                             dbManager.removeLogicallyDropColumn(tableInfo.getTableId());
                         }
                     }
                 } else if (!equalOrCanCast.equals(DataTypeCastUtils.IS_EQUAL())) {
-                    long schemaLastChangeTime = tableInfo.getProperties().getLong(DBConfig.TableInfoProperty.LAST_TABLE_SCHEMA_CHANGE_TIME);
+                    long schemaLastChangeTime = JSON.parseObject(tableInfo.getProperties()).getLong(DBConfig.TableInfoProperty.LAST_TABLE_SCHEMA_CHANGE_TIME);
                     if (equalOrCanCast.contains("Change of Partition Column") || equalOrCanCast.contains("Change of Primary Key Column")) {
                         throw new IOException(equalOrCanCast);
                     }

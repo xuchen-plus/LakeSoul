@@ -148,7 +148,7 @@ public class KafkaCdc {
         String namespace = splitTopicArray[1];
         DBManager lakeSoulDBManager = new DBManager();
         if (lakeSoulDBManager.getNamespaceByNamespace(namespace) == null) {
-            lakeSoulDBManager.createNewNamespace(namespace, new JSONObject(), "");
+            lakeSoulDBManager.createNewNamespace(namespace, new JSONObject().toJSONString(), "");
         }
 
         Configuration conf = new Configuration();

@@ -257,11 +257,10 @@ public class DBManager {
 
     public void updateTableSchema(String tableId, String tableSchema) {
         TableInfo tableInfo = tableInfoDao.selectByTableId(tableId);
-        tableInfo.setTableSchema(tableSchema);
-        JSONObject propertiesJson = tableInfo.getProperties();
+        JSONObject propertiesJson = JSON.parseObject(tableInfo.getProperties());
         propertiesJson.put(DBConfig.TableInfoProperty.LAST_TABLE_SCHEMA_CHANGE_TIME, String.valueOf(System.currentTimeMillis()));
         tableInfoDao.updateByTableId(tableId, "", "", tableSchema);
-        tableInfoDao.updatePropertiesById(tableId, propertiesJson);
+        tableInfoDao.updatePropertiesById(tableId, propertiesJson.toJSONString());
     }
 
     public void deleteTableInfo(String tablePath, String tableId, String tableNamespace) {
@@ -288,9 +287,9 @@ public class DBManager {
 
     public void removeLogicallyDropColumn(String tableId) {
         TableInfo tableInfo = tableInfoDao.selectByTableId(tableId);
-        JSONObject propertiesJson = tableInfo.getProperties();
+        JSONObject propertiesJson = JSON.parseObject(tableInfo.getProperties());
         propertiesJson.remove(DBConfig.TableInfoProperty.DROPPED_COLUMN);
-        tableInfoDao.updatePropertiesById(tableId, propertiesJson);
+        tableInfoDao.updatePropertiesById(tableId, propertiesJson.toJSONString());
     }
 
     public void deletePartitionInfoByTableId(String tableId) {
