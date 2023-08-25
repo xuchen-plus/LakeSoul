@@ -51,7 +51,7 @@ services:
     hostname: minio
 
   jobmanager:
-    image: flink:1.17.1-scala_2.12-java8
+    image: swr.cn-southwest-2.myhuaweicloud.com/dmetasoul-repo/flinkopen:flink-1.17.1-scala_2.12-java8-with-kafka
     ports:
       - "8081:8081"
     command: jobmanager
@@ -80,7 +80,7 @@ services:
       - "$HOME/parquet-hadoop-bundle-1.12.3.jar:/opt/flink/lib/parquet-hadoop-bundle-1.12.3.jar"
 
   taskmanager:
-    image: flink:1.17.1-scala_2.12-java8
+    image: swr.cn-southwest-2.myhuaweicloud.com/dmetasoul-repo/flinkopen:flink-1.17.1-scala_2.12-java8-with-kafka
     depends_on:
       - jobmanager
     command: taskmanager
