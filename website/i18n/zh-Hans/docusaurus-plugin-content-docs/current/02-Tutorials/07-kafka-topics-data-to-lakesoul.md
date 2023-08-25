@@ -1,5 +1,11 @@
 # Kafka 多 topic 数据入 LakeSoul 教程
 
+<!--
+SPDX-FileCopyrightText: 2023 LakeSoul Contributors
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 通过 LakeSul Kafka Stream 将 Kafka 中的数据同步到 LakeSul 非常方便。
 
 LakeSoul Kafka Stream 可以支持自动创建表，自动识别新 topic，exactly-once 语义、自动为表添加分区等功能。

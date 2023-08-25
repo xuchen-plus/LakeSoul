@@ -18,15 +18,24 @@
 package com.dmetasoul.lakesoul.meta.dao;
 
 import com.dmetasoul.lakesoul.meta.DBConnector;
-import com.dmetasoul.lakesoul.meta.entity.PartitionInfo;
-import com.dmetasoul.lakesoul.meta.rbac.AuthZEnforcer;
+import com.dmetasoul.lakesoul.meta.DBUtil;
+import com.dmetasoul.lakesoul.meta.entity.*;
+import com.dmetasoul.lakesoul.meta.jnr.NativeMetadataJavaClient;
+import com.dmetasoul.lakesoul.meta.jnr.NativeUtils;
 
 import java.sql.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class PartitionInfoDao {
 
     public void insert(PartitionInfo partitionInfo) {
+        if (NativeUtils.NATIVE_METADATA_UPDATE_ENABLED) {
+            Integer count = NativeMetadataJavaClient.insert(
+                    NativeUtils.CodedDaoType.InsertPartitionInfo,
+                    JniWrapper.newBuilder().addPartitionInfo(partitionInfo).build());
+            return;
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         try {
@@ -41,7 +50,14 @@ public class PartitionInfoDao {
         }
     }
 
-    public boolean transactionInsert(List<PartitionInfo> partitionInfoList, List<UUID> snapshotList) {
+    public boolean transactionInsert(List<PartitionInfo> partitionInfoList, List<String> snapshotList) {
+        if (NativeUtils.NATIVE_METADATA_UPDATE_ENABLED) {
+            if (partitionInfoList.isEmpty()) return true;
+            Integer count = NativeMetadataJavaClient.insert(
+                    NativeUtils.CodedDaoType.TransactionInsertPartitionInfo,
+                    JniWrapper.newBuilder().addAllPartitionInfo(partitionInfoList).build());
+            return count > 0;
+        }
         boolean flag = true;
         Connection conn = null;
         PreparedStatement pstmt = null;
@@ -54,8 +70,8 @@ public class PartitionInfoDao {
                 insertSinglePartitionInfo(conn, pstmt, partitionInfo);
             }
             pstmt = conn.prepareStatement("update data_commit_info set committed = 'true' where commit_id = ?");
-            for (UUID uuid : snapshotList) {
-                pstmt.setString(1, uuid.toString());
+            for (String uuid : snapshotList) {
+                pstmt.setString(1, uuid);
                 pstmt.execute();
             }
             conn.commit();
@@ -83,11 +99,11 @@ public class PartitionInfoDao {
 
     private void insertSinglePartitionInfo(Connection conn, PreparedStatement pstmt, PartitionInfo partitionInfo)
             throws SQLException {
-        Array array = conn.createArrayOf("UUID", partitionInfo.getSnapshot().toArray());
+        Array array = conn.createArrayOf("UUID", partitionInfo.getSnapshotList().stream().map(DBUtil::toJavaUUID).toArray());
         pstmt.setString(1, partitionInfo.getTableId());
         pstmt.setString(2, partitionInfo.getPartitionDesc());
         pstmt.setInt(3, partitionInfo.getVersion());
-        pstmt.setString(4, partitionInfo.getCommitOp());
+        pstmt.setString(4, partitionInfo.getCommitOp().name());
         pstmt.setArray(5, array);
         pstmt.setString(6, partitionInfo.getExpression());
         pstmt.setString(7, partitionInfo.getDomain());
@@ -95,6 +111,12 @@ public class PartitionInfoDao {
     }
 
     public void deleteByTableIdAndPartitionDesc(String tableId, String partitionDesc) {
+        if (NativeUtils.NATIVE_METADATA_UPDATE_ENABLED) {
+            Integer count = NativeMetadataJavaClient.update(
+                    NativeUtils.CodedDaoType.DeletePartitionInfoByTableIdAndPartitionDesc,
+                    Arrays.asList(tableId, partitionDesc));
+            return;
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         String sql =
@@ -112,6 +134,10 @@ public class PartitionInfoDao {
     }
 
     public void deleteByTableId(String tableId) {
+        if (NativeUtils.NATIVE_METADATA_UPDATE_ENABLED) {
+            Integer count = NativeMetadataJavaClient.update(NativeUtils.CodedDaoType.DeletePartitionInfoByTableId, Collections.singletonList(tableId));
+            return;
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         String sql = "delete from partition_info where table_id = ? ";
@@ -128,6 +154,12 @@ public class PartitionInfoDao {
     }
 
     public void deletePreviousVersionPartition(String tableId, String partitionDesc, long utcMills) {
+        if (NativeUtils.NATIVE_METADATA_UPDATE_ENABLED) {
+            Integer count = NativeMetadataJavaClient.update(
+                    NativeUtils.CodedDaoType.DeletePreviousVersionPartition,
+                    Arrays.asList(tableId, partitionDesc, Long.toString(utcMills)));
+            return;
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         String sql = "delete from partition_info where table_id = ? and partition_desc = ? and timestamp <= ?";
@@ -146,6 +178,15 @@ public class PartitionInfoDao {
     }
 
     public List<PartitionInfo> findByTableIdAndParList(String tableId, List<String> partitionDescList) {
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            if (partitionDescList.isEmpty()) return Collections.emptyList();
+            JniWrapper jniWrapper = NativeMetadataJavaClient.query(
+                    NativeUtils.CodedDaoType.ListPartitionDescByTableIdAndParList,
+                    Arrays.asList(tableId,
+                            String.join(NativeUtils.PARTITION_DESC_DELIM, partitionDescList)));
+            if (jniWrapper == null) return null;
+            return jniWrapper.getPartitionInfoList();
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         ResultSet rs = null;
@@ -174,19 +215,9 @@ public class PartitionInfoDao {
                 }
             }
             rs = pstmt.executeQuery();
+            System.out.println(pstmt);
             while (rs.next()) {
-                PartitionInfo partitionInfo = new PartitionInfo();
-                partitionInfo.setTableId(rs.getString("table_id"));
-                partitionInfo.setPartitionDesc(rs.getString("partition_desc"));
-                partitionInfo.setVersion(rs.getInt("version"));
-                partitionInfo.setCommitOp(rs.getString("commit_op"));
-                partitionInfo.setDomain(rs.getString("domain"));
-                Array snapshotArray = rs.getArray("snapshot");
-                List<UUID> uuidList = new ArrayList<>();
-                Collections.addAll(uuidList, (UUID[]) snapshotArray.getArray());
-                partitionInfo.setSnapshot(uuidList);
-                partitionInfo.setExpression(rs.getString("expression"));
-                rsList.add(partitionInfo);
+                rsList.add(partitionInfoFromResultSetWithoutTimestamp(rs));
             }
         } catch (SQLException e) {
             throw new RuntimeException(e);
@@ -197,6 +228,14 @@ public class PartitionInfoDao {
     }
 
     public PartitionInfo selectLatestPartitionInfo(String tableId, String partitionDesc) {
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            JniWrapper jniWrapper = NativeMetadataJavaClient.query(
+                    NativeUtils.CodedDaoType.SelectOnePartitionVersionByTableIdAndDesc,
+                    Arrays.asList(tableId, partitionDesc));
+            if (jniWrapper == null) return null;
+            List<PartitionInfo> partitionInfoList = jniWrapper.getPartitionInfoList();
+            return partitionInfoList.isEmpty() ? null : partitionInfoList.get(0);
+        }
         String sql = String.format(
                 "select m.table_id, t.partition_desc, m.version, m.commit_op, m.snapshot, m.expression, m.domain from (" +
                         "select table_id,partition_desc,max(version) from partition_info " +
@@ -207,7 +246,22 @@ public class PartitionInfoDao {
         return getPartitionInfo(sql);
     }
 
-    public long getLastedTimestamp(String tableId, String partitionDesc) {
+    public long getLatestTimestamp(String tableId, String partitionDesc) {
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            if (null == partitionDesc || "".equals(partitionDesc)) {
+                List<String> result = NativeMetadataJavaClient.queryScalar(
+                        NativeUtils.CodedDaoType.GetLatestTimestampFromPartitionInfoWithoutPartitionDesc,
+                        Collections.singletonList(tableId));
+                if (result == null || result.isEmpty()) return -1;
+                return Long.parseLong(result.get(0));
+            } else {
+                List<String> result = NativeMetadataJavaClient.queryScalar(
+                        NativeUtils.CodedDaoType.GetLatestTimestampFromPartitionInfo,
+                        Arrays.asList(tableId, partitionDesc));
+                if (result == null || result.isEmpty()) return -1;
+                return Long.parseLong(result.get(0));
+            }
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         ResultSet rs = null;
@@ -238,6 +292,13 @@ public class PartitionInfoDao {
     }
 
     public int getLastedVersionUptoTime(String tableId, String partitionDesc, long utcMills) {
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            List<String> result = NativeMetadataJavaClient.queryScalar(
+                    NativeUtils.CodedDaoType.GetLatestVersionUpToTimeFromPartitionInfo,
+                    Arrays.asList(tableId, partitionDesc, Long.toString(utcMills)));
+            if (result == null || result.isEmpty()) return -1;
+            return Integer.parseInt(result.get(0));
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         ResultSet rs = null;
@@ -268,6 +329,13 @@ public class PartitionInfoDao {
     }
 
     public long getLastedVersionTimestampUptoTime(String tableId, String partitionDesc, long utcMills) {
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            List<String> result = NativeMetadataJavaClient.queryScalar(
+                    NativeUtils.CodedDaoType.GetLatestVersionTimestampUpToTimeFromPartitionInfo,
+                    Arrays.asList(tableId, partitionDesc, Long.toString(utcMills)));
+            if (result == null || result.isEmpty()) return 0;
+            return Long.parseLong(result.get(0));
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         ResultSet rs = null;
@@ -298,6 +366,13 @@ public class PartitionInfoDao {
     }
 
     public List<PartitionInfo> getPartitionVersions(String tableId, String partitionDesc) {
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            JniWrapper jniWrapper = NativeMetadataJavaClient.query(
+                    NativeUtils.CodedDaoType.ListPartitionByTableIdAndDesc,
+                    Arrays.asList(tableId, partitionDesc));
+            if (jniWrapper == null) return null;
+            return jniWrapper.getPartitionInfoList();
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         ResultSet rs = null;
@@ -310,19 +385,7 @@ public class PartitionInfoDao {
             pstmt = conn.prepareStatement(sql);
             rs = pstmt.executeQuery();
             while (rs.next()) {
-                PartitionInfo partitionInfo = new PartitionInfo();
-                partitionInfo.setTableId(rs.getString("table_id"));
-                partitionInfo.setPartitionDesc(rs.getString("partition_desc"));
-                partitionInfo.setVersion(rs.getInt("version"));
-                partitionInfo.setCommitOp(rs.getString("commit_op"));
-                partitionInfo.setTimestamp(rs.getLong("timestamp"));
-                partitionInfo.setDomain(rs.getString("domain"));
-                Array snapshotArray = rs.getArray("snapshot");
-                List<UUID> uuidList = new ArrayList<>();
-                Collections.addAll(uuidList, (UUID[]) snapshotArray.getArray());
-                partitionInfo.setSnapshot(uuidList);
-                partitionInfo.setExpression(rs.getString("expression"));
-                rsList.add(partitionInfo);
+                rsList.add(partitionInfoFromResultSet(rs));
             }
         } catch (SQLException e) {
             throw new RuntimeException(e);
@@ -333,6 +396,13 @@ public class PartitionInfoDao {
     }
 
     public List<PartitionInfo> getPartitionDescByTableId(String tableId) {
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            JniWrapper jniWrapper = NativeMetadataJavaClient.query(
+                    NativeUtils.CodedDaoType.ListPartitionByTableId,
+                    Collections.singletonList(tableId));
+            if (jniWrapper == null) return null;
+            return jniWrapper.getPartitionInfoList();
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         ResultSet rs = null;
@@ -349,18 +419,7 @@ public class PartitionInfoDao {
             pstmt = conn.prepareStatement(sql);
             rs = pstmt.executeQuery();
             while (rs.next()) {
-                PartitionInfo partitionInfo = new PartitionInfo();
-                partitionInfo.setTableId(rs.getString("table_id"));
-                partitionInfo.setPartitionDesc(rs.getString("partition_desc"));
-                partitionInfo.setVersion(rs.getInt("version"));
-                partitionInfo.setCommitOp(rs.getString("commit_op"));
-                partitionInfo.setDomain(rs.getString("domain"));
-                Array snapshotArray = rs.getArray("snapshot");
-                List<UUID> uuidList = new ArrayList<>();
-                Collections.addAll(uuidList, (UUID[]) snapshotArray.getArray());
-                partitionInfo.setSnapshot(uuidList);
-                partitionInfo.setExpression(rs.getString("expression"));
-                rsList.add(partitionInfo);
+                rsList.add(partitionInfoFromResultSetWithoutTimestamp(rs));
             }
         } catch (SQLException e) {
             throw new RuntimeException(e);
@@ -371,7 +430,14 @@ public class PartitionInfoDao {
     }
 
     public PartitionInfo findByKey(String tableId, String partitionDesc, int version) {
-
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            JniWrapper jniWrapper = NativeMetadataJavaClient.query(
+                    NativeUtils.CodedDaoType.SelectPartitionVersionByTableIdAndDescAndVersion,
+                    Arrays.asList(tableId, partitionDesc, Integer.toString(version)));
+            if (jniWrapper == null) return null;
+            List<PartitionInfo> partitionInfoList = jniWrapper.getPartitionInfoList();
+            return partitionInfoList.isEmpty() ? null : partitionInfoList.get(0);
+        }
         String sql = String.format(
                 "select * from partition_info where table_id = '%s' and partition_desc = '%s' and version = %d",
                 tableId, partitionDesc, version);
@@ -380,6 +446,13 @@ public class PartitionInfoDao {
 
     public List<PartitionInfo> getPartitionsFromVersion(String tableId, String partitionDesc, int startVersion,
                                                         int endVersion) {
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            JniWrapper jniWrapper = NativeMetadataJavaClient.query(
+                    NativeUtils.CodedDaoType.ListPartitionVersionByTableIdAndPartitionDescAndVersionRange,
+                    Arrays.asList(tableId, partitionDesc, Integer.toString(startVersion), Integer.toString(endVersion)));
+            if (jniWrapper == null) return null;
+            return jniWrapper.getPartitionInfoList();
+        }
         String sql = String.format(
                 "select * from partition_info where table_id = '%s' and partition_desc = '%s' and version >= %d and " +
                         "version <= %d",
@@ -388,6 +461,13 @@ public class PartitionInfoDao {
     }
 
     public List<PartitionInfo> getOnePartition(String tableId, String partitionDesc) {
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            JniWrapper jniWrapper = NativeMetadataJavaClient.query(
+                    NativeUtils.CodedDaoType.SelectOnePartitionVersionByTableIdAndDesc,
+                    Arrays.asList(tableId, partitionDesc));
+            if (jniWrapper == null) return null;
+            return jniWrapper.getPartitionInfoList();
+        }
         String sql =
                 String.format("select * from partition_info where table_id = '%s' and partition_desc = '%s' limit 1",
                         tableId, partitionDesc);
@@ -396,6 +476,13 @@ public class PartitionInfoDao {
 
     public List<PartitionInfo> getPartitionsFromTimestamp(String tableId, String partitionDesc, long startTimestamp,
                                                           long endTimestamp) {
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            JniWrapper jniWrapper = NativeMetadataJavaClient.query(
+                    NativeUtils.CodedDaoType.ListPartitionVersionByTableIdAndPartitionDescAndTimestampRange,
+                    Arrays.asList(tableId, partitionDesc, Long.toString(startTimestamp), Long.toString(endTimestamp)));
+            if (jniWrapper == null) return null;
+            return jniWrapper.getPartitionInfoList();
+        }
         String sql = String.format(
                 "select * from partition_info where table_id = '%s' and partition_desc = '%s' and timestamp >= %d and" +
                         " timestamp < %d",
@@ -404,6 +491,13 @@ public class PartitionInfoDao {
     }
 
     public List<String> getAllPartitionDescByTableId(String tableId) {
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            JniWrapper jniWrapper = NativeMetadataJavaClient.query(
+                    NativeUtils.CodedDaoType.ListPartitionByTableId,
+                    Collections.singletonList(tableId));
+            if (jniWrapper == null) return null;
+            return jniWrapper.getPartitionInfoList().stream().map(PartitionInfo::getPartitionDesc).collect(Collectors.toList());
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         ResultSet rs = null;
@@ -424,12 +518,19 @@ public class PartitionInfoDao {
         return rsList;
     }
 
-    public Set<String> getCommitOpsBetweenVersions(String tableId, String partitionDesc, int firstVersion,
-                                                   int secondVersion) {
+    public Set<CommitOp> getCommitOpsBetweenVersions(String tableId, String partitionDesc, int firstVersion,
+                                                     int secondVersion) {
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            JniWrapper jniWrapper = NativeMetadataJavaClient.query(
+                    NativeUtils.CodedDaoType.ListCommitOpsBetweenVersions,
+                    Arrays.asList(tableId, partitionDesc, Integer.toString(firstVersion), Long.toString(secondVersion)));
+            if (jniWrapper == null) return null;
+            return jniWrapper.getPartitionInfoList().stream().map(PartitionInfo::getCommitOp).collect(Collectors.toSet());
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         ResultSet rs = null;
-        Set<String> commitOps = new HashSet<>();
+        Set<CommitOp> commitOps = new HashSet<>();
         try {
             conn = DBConnector.getConn();
             pstmt = conn.prepareStatement("select distinct(commit_op) from partition_info where table_id = ? and " +
@@ -440,7 +541,7 @@ public class PartitionInfoDao {
             pstmt.setInt(4, secondVersion);
             rs = pstmt.executeQuery();
             while (rs.next()) {
-                commitOps.add(rs.getString("commit_op"));
+                commitOps.add(CommitOp.valueOf(rs.getString("commit_op")));
             }
         } catch (SQLException e) {
             throw new RuntimeException(e);
@@ -462,19 +563,7 @@ public class PartitionInfoDao {
             rs = pstmt.executeQuery();
 
             while (rs.next()) {
-                partitionInfo = new PartitionInfo();
-                partitionInfo.setTableId(rs.getString("table_id"));
-                partitionInfo.setPartitionDesc(rs.getString("partition_desc"));
-                partitionInfo.setVersion(rs.getInt("version"));
-                partitionInfo.setCommitOp(rs.getString("commit_op"));
-                partitionInfo.setTimestamp(rs.getLong("timestamp"));
-                partitionInfo.setDomain(rs.getString("domain"));
-                Array snapshotArray = rs.getArray("snapshot");
-                List<UUID> uuidList = new ArrayList<>();
-                Collections.addAll(uuidList, (UUID[]) snapshotArray.getArray());
-                partitionInfo.setSnapshot(uuidList);
-                partitionInfo.setExpression(rs.getString("expression"));
-                partitions.add(partitionInfo);
+                partitions.add(partitionInfoFromResultSet(rs));
             }
         } catch (SQLException e) {
             throw new RuntimeException(e);
@@ -495,17 +584,7 @@ public class PartitionInfoDao {
             rs = pstmt.executeQuery();
 
             while (rs.next()) {
-                partitionInfo = new PartitionInfo();
-                partitionInfo.setTableId(rs.getString("table_id"));
-                partitionInfo.setPartitionDesc(rs.getString("partition_desc"));
-                partitionInfo.setVersion(rs.getInt("version"));
-                partitionInfo.setCommitOp(rs.getString("commit_op"));
-                partitionInfo.setDomain(rs.getString("domain"));
-                Array snapshotArray = rs.getArray("snapshot");
-                List<UUID> uuidList = new ArrayList<>();
-                Collections.addAll(uuidList, (UUID[]) snapshotArray.getArray());
-                partitionInfo.setSnapshot(uuidList);
-                partitionInfo.setExpression(rs.getString("expression"));
+                partitionInfo = partitionInfoFromResultSetWithoutTimestamp(rs);
             }
         } catch (SQLException e) {
             throw new RuntimeException(e);
@@ -528,5 +607,31 @@ public class PartitionInfoDao {
         } finally {
             DBConnector.closeConn(pstmt, conn);
         }
+    }
+
+    public static PartitionInfo partitionInfoFromResultSet(ResultSet rs) throws SQLException {
+        PartitionInfo.Builder partitionInfo = PartitionInfo.newBuilder()
+                .setTableId(rs.getString("table_id"))
+                .setPartitionDesc(rs.getString("partition_desc"))
+                .setVersion(rs.getInt("version"))
+                .setCommitOp(CommitOp.valueOf(rs.getString("commit_op")))
+                .setDomain(rs.getString("domain"))
+                .setTimestamp(rs.getLong("timestamp"));
+        Array snapshotArray = rs.getArray("snapshot");
+        partitionInfo.addAllSnapshot(Arrays.stream((UUID[]) snapshotArray.getArray()).map(DBUtil::toProtoUuid).collect(Collectors.toList()));
+        partitionInfo.setExpression(rs.getString("expression"));
+        return partitionInfo.build();
+    }
+
+    public static PartitionInfo partitionInfoFromResultSetWithoutTimestamp(ResultSet rs) throws SQLException {
+        PartitionInfo.Builder partitionInfo = PartitionInfo.newBuilder()
+                .setTableId(rs.getString("table_id"))
+                .setPartitionDesc(rs.getString("partition_desc"))
+                .setVersion(rs.getInt("version"))
+                .setCommitOp(CommitOp.valueOf(rs.getString("commit_op")));
+        Array snapshotArray = rs.getArray("snapshot");
+        partitionInfo.addAllSnapshot(Arrays.stream((UUID[]) snapshotArray.getArray()).map(DBUtil::toProtoUuid).collect(Collectors.toList()));
+        partitionInfo.setExpression(rs.getString("expression"));
+        return partitionInfo.build();
     }
 }

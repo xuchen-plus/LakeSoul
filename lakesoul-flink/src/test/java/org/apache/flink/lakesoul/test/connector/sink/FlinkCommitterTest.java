@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2023 LakeSoul Contributors
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package org.apache.flink.lakesoul.test.connector.sink;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -65,8 +69,7 @@ public class FlinkCommitterTest {
                     SOURCE_DATA.stream()
                             .map(x -> Tuple3.of(x, null, Long.MIN_VALUE).toString())
                             .sorted()
-                            .collect(joining("+")),
-                    END_OF_INPUT_STR);
+                            .collect(joining("+")));
 
     static final Queue<String> COMMIT_QUEUE = new ConcurrentLinkedQueue<>();
 

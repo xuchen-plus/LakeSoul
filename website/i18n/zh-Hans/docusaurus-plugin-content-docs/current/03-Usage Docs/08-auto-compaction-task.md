@@ -1,5 +1,11 @@
 # LakeSoul 全局自动压缩服务使用方法
 
+<!--
+SPDX-FileCopyrightText: 2023 LakeSoul Contributors
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 :::tip
 该功能于 2.3.0 版本起提供
 :::

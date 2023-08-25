@@ -18,7 +18,10 @@
 package com.dmetasoul.lakesoul.meta.dao;
 
 import com.dmetasoul.lakesoul.meta.DBConnector;
+import com.dmetasoul.lakesoul.meta.entity.JniWrapper;
 import com.dmetasoul.lakesoul.meta.entity.TableNameId;
+import com.dmetasoul.lakesoul.meta.jnr.NativeMetadataJavaClient;
+import com.dmetasoul.lakesoul.meta.jnr.NativeUtils;
 import org.apache.commons.lang3.StringUtils;
 
 import java.sql.Connection;
@@ -26,11 +29,22 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
 public class TableNameIdDao {
 
     public TableNameId findByTableName(String tableName, String tableNamespace) {
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            JniWrapper jniWrapper = NativeMetadataJavaClient.query(
+                    NativeUtils.CodedDaoType.SelectTableNameIdByTableName,
+                    Arrays.asList(tableName, tableNamespace));
+            if (jniWrapper == null) return null;
+            List<TableNameId> tableNameIdList = jniWrapper.getTableNameIdList();
+            return tableNameIdList.isEmpty() ? null : tableNameIdList.get(0);
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         ResultSet rs = null;
@@ -52,12 +66,20 @@ public class TableNameIdDao {
         return tableNameId;
     }
 
-    public List<String> listAllNameByNamespace(String table_namespace) {
+    public List<String> listAllNameByNamespace(String tableNamespace) {
+        if (NativeUtils.NATIVE_METADATA_QUERY_ENABLED) {
+            JniWrapper jniWrapper = NativeMetadataJavaClient.query(
+                    NativeUtils.CodedDaoType.ListTableNameByNamespace,
+                    Collections.singletonList(tableNamespace));
+            if (jniWrapper == null) return null;
+            List<TableNameId> tableNameIdList = jniWrapper.getTableNameIdList();
+            return tableNameIdList.stream().map(TableNameId::getTableName).collect(Collectors.toList());
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         ResultSet rs = null;
         String sql =
-                String.format("select table_name from table_name_id where table_namespace = '%s'", table_namespace);
+                String.format("select table_name from table_name_id where table_namespace = '%s'", tableNamespace);
         List<String> list = new ArrayList<>();
         try {
             conn = DBConnector.getConn();
@@ -76,6 +98,12 @@ public class TableNameIdDao {
     }
 
     public void insert(TableNameId tableNameId) {
+        if (NativeUtils.NATIVE_METADATA_UPDATE_ENABLED) {
+            Integer count = NativeMetadataJavaClient.insert(
+                    NativeUtils.CodedDaoType.InsertTableNameId,
+                    JniWrapper.newBuilder().addTableNameId(tableNameId).build());
+            return;
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         try {
@@ -95,6 +123,10 @@ public class TableNameIdDao {
     }
 
     public void delete(String tableName, String tableNamespace) {
+        if (NativeUtils.NATIVE_METADATA_UPDATE_ENABLED) {
+            Integer count = NativeMetadataJavaClient.update(NativeUtils.CodedDaoType.DeleteTableNameIdByTableNameAndNamespace, Arrays.asList(tableName, tableNamespace));
+            return;
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         String sql =
@@ -112,6 +144,12 @@ public class TableNameIdDao {
     }
 
     public void deleteByTableId(String tableId) {
+        if (NativeUtils.NATIVE_METADATA_UPDATE_ENABLED) {
+            Integer count = NativeMetadataJavaClient.update(
+                    NativeUtils.CodedDaoType.DeleteTableNameIdByTableId,
+                    Collections.singletonList(tableId));
+            return;
+        }
         Connection conn = null;
         PreparedStatement pstmt = null;
         String sql = String.format("delete from table_name_id where table_id = '%s' ", tableId);
@@ -165,11 +203,21 @@ public class TableNameIdDao {
     }
 
     public static TableNameId tableNameIdFromResultSet(ResultSet rs) throws SQLException {
-        TableNameId tableNameId = new TableNameId();
-        tableNameId.setTableName(rs.getString("table_name"));
-        tableNameId.setTableId(rs.getString("table_id"));
-        tableNameId.setTableNamespace(rs.getString("table_namespace"));
-        tableNameId.setDomain(rs.getString("domain"));
-        return tableNameId;
+        return TableNameId.newBuilder()
+                .setTableName(rs.getString("table_name"))
+                .setTableId(rs.getString("table_id"))
+                .setTableNamespace(rs.getString("table_namespace"))
+                .setDomain(rs.getString("domain"))
+                .build();
+    }
+
+    public static TableNameId newTableNameId(String tableName, String tableId, String namespace, String domain) {
+        return TableNameId
+                .newBuilder()
+                .setTableName(tableName)
+                .setTableId(tableId)
+                .setTableNamespace(namespace)
+                .setDomain(domain)
+                .build();
     }
 }

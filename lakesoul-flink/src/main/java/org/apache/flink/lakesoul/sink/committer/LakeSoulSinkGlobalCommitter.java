@@ -1,20 +1,6 @@
-/*
- *
- *  * Copyright [2022] [DMetaSoul Team]
- *  *
- *  * Licensed under the Apache License, Version 2.0 (the "License");
- *  * you may not use this file except in compliance with the License.
- *  * You may obtain a copy of the License at
- *  *
- *  *     http://www.apache.org/licenses/LICENSE-2.0
- *  *
- *  * Unless required by applicable law or agreed to in writing, software
- *  * distributed under the License is distributed on an "AS IS" BASIS,
- *  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  * See the License for the specific language governing permissions and
- *  * limitations under the License.
- *
- */
+// SPDX-FileCopyrightText: 2023 LakeSoul Contributors
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package org.apache.flink.lakesoul.sink.committer;
 
@@ -116,7 +102,9 @@ public class LakeSoulSinkGlobalCommitter
             List<LakeSoulMultiTableSinkGlobalCommittable> globalCommittables) throws IOException, InterruptedException {
         LakeSoulMultiTableSinkGlobalCommittable globalCommittable =
                 LakeSoulMultiTableSinkGlobalCommittable.fromLakeSoulMultiTableSinkGlobalCommittable(globalCommittables);
+        LOG.info("Committing: {}", globalCommittable);
 
+        int index = 0;
         for (Map.Entry<Tuple2<TableSchemaIdentity, String>, List<LakeSoulMultiTableSinkCommittable>> entry :
                 globalCommittable.getGroupedCommitables()
                         .entrySet()) {
@@ -129,11 +117,14 @@ public class LakeSoulSinkGlobalCommitter
                     identity.properties.getOrDefault(CDC_CHANGE_COLUMN, CDC_CHANGE_COLUMN_DEFAULT).toString()) :
                     Optional.empty());
             TableInfo tableInfo = dbManager.getTableInfoByNameAndNamespace(tableName, tableNamespace);
+            LOG.info("Committing: {}, {}, {}, {} {}", tableNamespace, tableName, isCdc, msgSchema, tableInfo);
             if (tableInfo == null) {
                 String tableId = TABLE_ID_PREFIX + UUID.randomUUID();
                 String partition = DBUtil.formatTableInfoPartitionsField(identity.primaryKeys,
                         identity.partitionKeyList);
 
+                LOG.info("Creating table: {}, {}, {}, {}, {}, {}, {}", tableId, tableNamespace, tableName,
+                        identity.tableLocation, msgSchema, identity.properties, partition);
                 dbManager.createNewTable(tableId, tableNamespace, tableName, identity.tableLocation, msgSchema.json(),
                         identity.properties, partition);
             } else {
@@ -163,6 +154,8 @@ public class LakeSoulSinkGlobalCommitter
                             dbManager.updateTableSchema(tableInfo.getTableId(), msgSchema.json());
                         }
                     } else {
+                        LOG.info("Changing table schema: {}, {}, {}, {}, {}", tableNamespace, tableName, identity.tableLocation,
+                                msgSchema, identity.properties);
                         dbManager.updateTableSchema(tableInfo.getTableId(), msgSchema.json());
                         if (tableInfo.getProperties().containsKey(DBConfig.TableInfoProperty.DROPPED_COLUMN)) {
                             dbManager.removeLogicallyDropColumn(tableInfo.getTableId());

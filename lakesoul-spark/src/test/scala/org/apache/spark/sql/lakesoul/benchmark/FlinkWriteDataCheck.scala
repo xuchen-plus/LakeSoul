@@ -1,21 +1,6 @@
-/*
- *
- * Copyright [2022] [DMetaSoul Team]
- *
- *  Licensed under the Apache License, Version 2.0 (the "License");
- *  you may not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
- *
- *
- */
+// SPDX-FileCopyrightText: 2023 LakeSoul Contributors
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package org.apache.spark.sql.lakesoul.benchmark
 
@@ -81,7 +66,6 @@ object FlinkWriteDataCheck {
       .config("spark.sql.catalog.lakesoul", classOf[LakeSoulCatalog].getName)
       .config(SQLConf.DEFAULT_CATALOG.key, LakeSoulCatalog.CATALOG_NAME)
       .config("spark.default.parallelism", "16")
-      .config("spark.dmetasoul.lakesoul.native.io.enable", "false")
 
     val spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel("ERROR")
@@ -90,15 +74,17 @@ object FlinkWriteDataCheck {
     val csvTablePath = SparkUtil.makeQualifiedTablePath(new Path(csvPath)).toString
 
     val lakeSoulDF = LakeSoulTable.forPath(lakeSoulTablePath).toDF
-    val csvDF = spark.read.schema(lakeSoulDF.schema).format("csv").load(csvTablePath)
+    val csvDF = spark.read.schema(lakeSoulDF.schema).format("parquet").load(csvTablePath)
 
-    val diff = lakeSoulDF.rdd.subtract(csvDF.rdd)
-    val result = diff.count() == 0
+    val diff1 = lakeSoulDF.rdd.subtract(csvDF.rdd)
+    val result = lakeSoulDF.count() == csvDF.count() && diff1.count() == 0
 
     if (!result) {
-      println(printLine + " data verify result: " + result + printLine)
-      spark.createDataFrame(diff, lakeSoulDF.schema).show()
-      println(printLine + "data verification ERROR!!!" + printLine)
+      println(printLine)
+      println(s"CSV count ${csvDF.count()}, LakeSoul count ${lakeSoulDF.count()}")
+      println("*************diff1**************")
+      spark.createDataFrame(diff1, lakeSoulDF.schema).show()
+      println("data verification ERROR!!!")
       System.exit(1)
     } else {
       println(printLine + "data verification SUCCESS!!!" + printLine)

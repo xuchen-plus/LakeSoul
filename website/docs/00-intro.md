@@ -4,6 +4,12 @@ sidebar_position: 1
 
 # LakeSoul Introduction
 
+<!--
+SPDX-FileCopyrightText: 2023 LakeSoul Contributors
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 LakeSoul is a cloud-native Lakehouse framework and supports scalable metadata management, ACID transactions, efficient and flexible upsert operation, schema evolution, and unified streaming & batch processing.
 
 LakeSoul project was originally created by DMetaSoul company and was donated to Linux Foundation AI & Data as a sandbox project since May 2023.

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2023 LakeSoul Contributors
+--
+-- SPDX-License-Identifier: Apache-2.0
+
 create table if not exists namespace
 (
     namespace  text,
@@ -7,8 +11,7 @@ create table if not exists namespace
     primary key (namespace)
 );
 
-insert into namespace(namespace, properties)
-values ('default', '{}')
+insert into namespace(namespace, properties, comment) values ('default', '{}', '')
 ON CONFLICT DO NOTHING;
 
 create table if not exists table_info

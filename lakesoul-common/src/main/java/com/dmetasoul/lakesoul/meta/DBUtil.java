@@ -1,19 +1,6 @@
-/*
- * Copyright [2022] [DMetaSoul Team]
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
- */
+// SPDX-FileCopyrightText: 2023 LakeSoul Contributors
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package com.dmetasoul.lakesoul.meta;
 
@@ -21,10 +8,14 @@ import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import com.dmetasoul.lakesoul.meta.entity.DataFileOp;
+import com.dmetasoul.lakesoul.meta.entity.FileOp;
+import com.dmetasoul.lakesoul.meta.entity.Uuid;
 import com.zaxxer.hikari.HikariConfig;
 import org.apache.commons.lang3.StringUtils;
 
 import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.sql.Connection;
@@ -107,6 +98,14 @@ public class DBUtil {
         dataBaseProperty.setUrl(properties.getProperty(urlKey, urlDefault));
         dataBaseProperty.setUsername(properties.getProperty(usernameKey, usernameDefault));
         dataBaseProperty.setPassword(properties.getProperty(passwordKey, passwordDefault));
+        try {
+            URL url = new URL(properties.getProperty(urlKey, urlDefault).replaceFirst("jdbc:postgresql", "http"));
+            dataBaseProperty.setDbName(url.getPath().substring(1));
+            dataBaseProperty.setHost(url.getHost());
+            dataBaseProperty.setPort(String.valueOf(url.getPort()));
+        } catch (MalformedURLException e) {
+            throw new RuntimeException(e);
+        }
         return dataBaseProperty;
     }
 
@@ -174,7 +173,7 @@ public class DBUtil {
         sb.append("{");
         for (DataFileOp dataFileOp : dataFileOpList) {
             String path = dataFileOp.getPath();
-            String fileOp = dataFileOp.getFileOp();
+            String fileOp = dataFileOp.getFileOp().name();
             long size = dataFileOp.getSize();
             String fileExistCols = dataFileOp.getFileExistCols();
             sb.append(String.format("\"(%s,%s,%s,\\\"%s\\\")\",", path, fileOp, size, fileExistCols));
@@ -198,16 +197,16 @@ public class DBUtil {
                 continue;
             }
             tmpElem = tmpElem.substring(1, tmpElem.length() - 1);
-            DataFileOp dataFileOp = new DataFileOp();
+            DataFileOp.Builder dataFileOp = DataFileOp.newBuilder();
             dataFileOp.setPath(tmpElem.substring(0, tmpElem.indexOf(",")));
             tmpElem = tmpElem.substring(tmpElem.indexOf(",") + 1);
             String fileOp = tmpElem.substring(0, tmpElem.indexOf(","));
-            dataFileOp.setFileOp(fileOp);
+            dataFileOp.setFileOp(FileOp.valueOf(fileOp));
             tmpElem = tmpElem.substring(tmpElem.indexOf(",") + 1);
             dataFileOp.setSize(Long.parseLong(tmpElem.substring(0, tmpElem.indexOf(","))));
             tmpElem = tmpElem.substring(tmpElem.indexOf(",") + 1);
             dataFileOp.setFileExistCols(tmpElem);
-            rsList.add(dataFileOp);
+            rsList.add(dataFileOp.build());
         }
         return rsList;
     }
@@ -316,5 +315,24 @@ public class DBUtil {
             if (rangeKeys.isEmpty()) return "";
             return String.join(LAKESOUL_RANGE_PARTITION_SPLITTER, rangeKeys);
         }
+    }
+
+    public static UUID toJavaUUID(Uuid uuid) {
+        return new UUID(uuid.getHigh(), uuid.getLow());
+    }
+
+    public static Uuid toProtoUuid(UUID uuid) {
+        return Uuid.newBuilder().setHigh(uuid.getMostSignificantBits()).setLow(uuid.getLeastSignificantBits()).build();
+    }
+
+    public static String protoUuidToJniString(Uuid uuid) {
+        StringBuilder sb = new StringBuilder();
+        String high = Long.toUnsignedString(uuid.getHigh(), 16);
+        sb.append(new String(new char[16 - high.length()]).replace("\0", "0"));
+        sb.append(high);
+        String low = Long.toUnsignedString(uuid.getLow(), 16);
+        sb.append(new String(new char[16 - low.length()]).replace("\0", "0"));
+        sb.append(low);
+        return sb.toString();
     }
 }

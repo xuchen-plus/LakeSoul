@@ -1,20 +1,6 @@
-/*
- *
- *  * Copyright [2022] [DMetaSoul Team]
- *  *
- *  * Licensed under the Apache License, Version 2.0 (the "License");
- *  * you may not use this file except in compliance with the License.
- *  * You may obtain a copy of the License at
- *  *
- *  *     http://www.apache.org/licenses/LICENSE-2.0
- *  *
- *  * Unless required by applicable law or agreed to in writing, software
- *  * distributed under the License is distributed on an "AS IS" BASIS,
- *  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  * See the License for the specific language governing permissions and
- *  * limitations under the License.
- *
- */
+// SPDX-FileCopyrightText: 2023 LakeSoul Contributors
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package org.apache.flink.lakesoul.sink.state;
 
@@ -64,21 +50,21 @@ public class LakeSoulMultiTableSinkGlobalCommittable implements Serializable {
 
     public static LakeSoulMultiTableSinkGlobalCommittable fromLakeSoulMultiTableSinkGlobalCommittable(
             List<LakeSoulMultiTableSinkGlobalCommittable> globalCommittables) {
-        Map<Tuple2<TableSchemaIdentity, String>, List<LakeSoulMultiTableSinkCommittable>> groupedCommittables =
+        Map<Tuple2<TableSchemaIdentity, String>, List<LakeSoulMultiTableSinkCommittable>> groupedCommitables =
                 new HashMap<>();
         globalCommittables.forEach(globalCommittable -> globalCommittable.getGroupedCommitables().forEach(
-                (key, value) -> groupedCommittables.computeIfAbsent(key, tuple2 -> new ArrayList<>()).addAll(value)));
-        return new LakeSoulMultiTableSinkGlobalCommittable(groupedCommittables);
+                (key, value) -> groupedCommitables.computeIfAbsent(key, tuple2 -> new ArrayList<>()).addAll(value)));
+        return new LakeSoulMultiTableSinkGlobalCommittable(groupedCommitables);
     }
 
     public static LakeSoulMultiTableSinkGlobalCommittable fromLakeSoulMultiTableSinkCommittable(
             List<LakeSoulMultiTableSinkCommittable> committables) {
-        Map<Tuple2<TableSchemaIdentity, String>, List<LakeSoulMultiTableSinkCommittable>> groupedCommittables =
+        Map<Tuple2<TableSchemaIdentity, String>, List<LakeSoulMultiTableSinkCommittable>> groupedCommitables =
                 new HashMap<>();
-        committables.forEach(committable -> groupedCommittables.computeIfAbsent(
+        committables.forEach(committable -> groupedCommitables.computeIfAbsent(
                         Tuple2.of(committable.getIdentity(), committable.getBucketId()), tuple2 -> new ArrayList<>())
                 .add(committable));
-        return new LakeSoulMultiTableSinkGlobalCommittable(groupedCommittables);
+        return new LakeSoulMultiTableSinkGlobalCommittable(groupedCommitables);
     }
 
 
@@ -86,4 +72,8 @@ public class LakeSoulMultiTableSinkGlobalCommittable implements Serializable {
         return groupedCommitables;
     }
 
+    @Override
+    public String toString() {
+        return "LakeSoulMultiTableSinkGlobalCommittable{" + "groupedCommitables=" + groupedCommitables + '}';
+    }
 }
