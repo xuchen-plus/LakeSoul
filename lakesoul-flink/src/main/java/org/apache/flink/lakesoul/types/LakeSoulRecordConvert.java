@@ -4,7 +4,6 @@
 
 package org.apache.flink.lakesoul.types;
 
-import com.alibaba.fastjson.JSONObject;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Decimal;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Field;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Schema;
@@ -73,8 +72,6 @@ public class LakeSoulRecordConvert implements Serializable {
 
     List<String> partitionFields;
 
-    private final JSONObject properties;
-
     JsonToRowDataConverters converter;
 
     public LakeSoulRecordConvert(Configuration conf, String serverTimeZone) {
@@ -86,8 +83,6 @@ public class LakeSoulRecordConvert implements Serializable {
         this.cdcColumn = conf.getString(CDC_CHANGE_COLUMN, CDC_CHANGE_COLUMN_DEFAULT);
         this.serverTimeZone = ZoneId.of(serverTimeZone);
         this.partitionFields = partitionFields;
-
-        properties = FlinkUtil.getPropertiesFromConfiguration(conf);
 
         converter = new JsonToRowDataConverters(true, false, ISO_8601);
     }
@@ -134,7 +129,8 @@ public class LakeSoulRecordConvert implements Serializable {
     public LakeSoulRowDataWrapper toLakeSoulDataType(Schema sch, Struct value, TableId tableId, long tsMs, long sortField) throws Exception {
         Envelope.Operation op = getOperation(sch, value);
         Schema valueSchema = value.schema();
-        LakeSoulRowDataWrapper.Builder builder = LakeSoulRowDataWrapper.newBuilder().setTableId(tableId).setProperties(properties);
+        LakeSoulRowDataWrapper.Builder builder = LakeSoulRowDataWrapper.newBuilder().setTableId(tableId)
+                .setUseCDC(useCDC).setCDCColumn(cdcColumn);
         if (op == Envelope.Operation.CREATE || op == Envelope.Operation.READ) {
             Schema afterSchema = valueSchema.field(Envelope.FieldName.AFTER).schema();
             Struct after = value.getStruct(Envelope.FieldName.AFTER);
@@ -200,6 +196,8 @@ public class LakeSoulRecordConvert implements Serializable {
             colNames[i] = item.name();
             colTypes[i] = convertToLogical(item.schema());
         }
+//        colNames[useCDC ? arity - 3 : arity - 2] = BINLOG_FILE_INDEX;
+//        colTypes[useCDC ? arity - 3 : arity - 2] = new BigIntType();
         colNames[useCDC ? arity - 2 : arity - 1] = SORT_FIELD;
         colTypes[useCDC ? arity - 2 : arity - 1] = new BigIntType();
         if (useCDC) {

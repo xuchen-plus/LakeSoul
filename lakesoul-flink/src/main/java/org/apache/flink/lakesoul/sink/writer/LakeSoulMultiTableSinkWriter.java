@@ -48,7 +48,21 @@ public class LakeSoulMultiTableSinkWriter extends AbstractLakeSoulMultiTableSink
                 element.getTableLocation(),
                 element.getPrimaryKeys(),
                 element.getPartitionKeys(),
-                element.getData().getProperties());
+                element.getData().getUseCDC(),
+                element.getData().getCdcColumn());
+    }
+
+    @Override
+    protected TableSchemaWriterCreator getOrCreateTableSchemaWriterCreator(TableSchemaIdentity identity) {
+        return perTableSchemaWriterCreator.computeIfAbsent(identity, identity1 -> {
+            try {
+                return TableSchemaWriterCreator.create(identity1.tableId, identity1.rowType,
+                        identity1.tableLocation, identity1.primaryKeys,
+                        identity1.partitionKeyList, conf);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
     }
 
     @Override

@@ -13,6 +13,7 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
+import org.apache.flink.runtime.fs.hdfs.HadoopFileSystem;
 import org.apache.flink.runtime.util.HadoopUtils;
 import org.apache.flink.table.api.*;
 import org.apache.flink.table.api.Schema.Builder;
@@ -39,6 +40,8 @@ import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.apache.flink.table.types.logical.utils.LogicalTypeChecks;
 import org.apache.flink.types.RowKind;
+import org.apache.hadoop.fs.permission.FsAction;
+import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.spark.sql.types.Metadata;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
@@ -49,6 +52,7 @@ import scala.Option;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -85,7 +89,9 @@ public class FlinkUtil {
             String name = field.getName();
             if (name.equals(SORT_FIELD)) continue;
             LogicalType logicalType = field.getType();
-            org.apache.spark.sql.types.DataType dataType = org.apache.spark.sql.arrow.ArrowUtils.fromArrowField(ArrowUtils.toArrowField(name, logicalType));
+            org.apache.spark.sql.types.DataType
+                    dataType =
+                    org.apache.spark.sql.arrow.ArrowUtils.fromArrowField(ArrowUtils.toArrowField(name, logicalType));
             stNew = stNew.add(name, dataType, logicalType.isNullable());
         }
 
@@ -99,7 +105,15 @@ public class FlinkUtil {
             } else {
                 StructField field = stNew.fields()[(Integer) cdcFieldIndex.get()];
                 if (!field.toString().equals(cdcField.toString()))
-                    throw new CatalogException(CDC_CHANGE_COLUMN + "=" + cdcColName + "has an invalid field of" + field + "," + CDC_CHANGE_COLUMN + " require field of " + cdcField);
+                    throw new CatalogException(CDC_CHANGE_COLUMN +
+                            "=" +
+                            cdcColName +
+                            "has an invalid field of" +
+                            field +
+                            "," +
+                            CDC_CHANGE_COLUMN +
+                            " require field of " +
+                            cdcField);
             }
         }
         return stNew;
@@ -111,7 +125,10 @@ public class FlinkUtil {
         for (int i = 0; i < tsc.getFieldCount(); i++) {
             String name = tsc.getFieldName(i).get();
             DataType dt = tsc.getFieldDataType(i).get();
-            org.apache.spark.sql.types.DataType dataType = org.apache.spark.sql.arrow.ArrowUtils.fromArrowField(ArrowUtils.toArrowField(name, dt.getLogicalType()));
+            org.apache.spark.sql.types.DataType
+                    dataType =
+                    org.apache.spark.sql.arrow.ArrowUtils.fromArrowField(ArrowUtils.toArrowField(name,
+                            dt.getLogicalType()));
             stNew = stNew.add(name, dataType, dt.getLogicalType().isNullable());
         }
         if (cdcColumn.isPresent()) {
@@ -124,7 +141,15 @@ public class FlinkUtil {
             } else {
                 StructField field = stNew.fields()[(Integer) cdcFieldIndex.get()];
                 if (!field.toString().equals(cdcField.toString()))
-                    throw new CatalogException(CDC_CHANGE_COLUMN + "=" + cdcColName + " has an invalid field of " + field + "," + CDC_CHANGE_COLUMN + " require field of " + cdcField);
+                    throw new CatalogException(CDC_CHANGE_COLUMN +
+                            "=" +
+                            cdcColName +
+                            " has an invalid field of " +
+                            field +
+                            "," +
+                            CDC_CHANGE_COLUMN +
+                            " require field of " +
+                            cdcField);
             }
         }
         return stNew;
@@ -237,12 +262,14 @@ public class FlinkUtil {
         JSONObject properties = JSON.parseObject(tableInfo.getProperties());
 
         StructType struct = (StructType) org.apache.spark.sql.types.DataType.fromJson(tableSchema);
-        org.apache.arrow.vector.types.pojo.Schema arrowSchema = org.apache.spark.sql.arrow.ArrowUtils.toArrowSchema(struct, ZoneId.of("UTC").toString());
+        org.apache.arrow.vector.types.pojo.Schema
+                arrowSchema =
+                org.apache.spark.sql.arrow.ArrowUtils.toArrowSchema(struct, ZoneId.of("UTC").toString());
         RowType rowType = ArrowUtils.fromArrowSchema(arrowSchema);
         Builder bd = Schema.newBuilder();
 
         String lakesoulCdcColumnName = properties.getString(CDC_CHANGE_COLUMN);
-        boolean contains = (lakesoulCdcColumnName != null && !"".equals(lakesoulCdcColumnName));
+        boolean contains = (lakesoulCdcColumnName != null && !lakesoulCdcColumnName.isEmpty());
 
         for (RowType.RowField field : rowType.getFields()) {
             if (contains && field.getName().equals(lakesoulCdcColumnName)) {
@@ -341,9 +368,16 @@ public class FlinkUtil {
 
     public static void setFSConfigs(Configuration conf, NativeIOBase io) {
         conf.addAll(GlobalConfiguration.loadConfiguration());
-        org.apache.hadoop.conf.Configuration hadoopConf = HadoopUtils.getHadoopConfiguration(GlobalConfiguration.loadConfiguration());
-        String defaultFS = hadoopConf.get("fs.defaultFS");
-        io.setObjectStoreOption("fs.defaultFS", defaultFS);
+        try {
+            FlinkUtil.class.getClassLoader().loadClass("org.apache.hadoop.hdfs.HdfsConfiguration");
+            org.apache.hadoop.conf.Configuration
+                    hadoopConf =
+                    HadoopUtils.getHadoopConfiguration(GlobalConfiguration.loadConfiguration());
+            String defaultFS = hadoopConf.get("fs.defaultFS");
+            io.setObjectStoreOption("fs.defaultFS", defaultFS);
+        } catch (Exception e) {
+            // ignore
+        }
 
         // try hadoop's s3 configs
         setFSConf(conf, "fs.s3a.access.key", "fs.s3a.access.key", io);
@@ -416,7 +450,8 @@ public class FlinkUtil {
         }
     }
 
-    public static Map<String, Map<Integer, List<Path>>> splitDataInfosToRangeAndHashPartition(String tid, DataFileInfo[] dfinfos) {
+    public static Map<String, Map<Integer, List<Path>>> splitDataInfosToRangeAndHashPartition(String tid,
+                                                                                              DataFileInfo[] dfinfos) {
         Map<String, Map<Integer, List<Path>>> splitByRangeAndHashPartition = new LinkedHashMap<>();
         TableInfo tif = DataOperation.dbManager().getTableInfoByTableId(tid);
         for (DataFileInfo pif : dfinfos) {
@@ -452,7 +487,8 @@ public class FlinkUtil {
 
     public static boolean isExistHashPartition(TableInfo tif) {
         JSONObject tableProperties = JSON.parseObject(tif.getProperties());
-        if (tableProperties.containsKey(LakeSoulOptions.HASH_BUCKET_NUM()) && tableProperties.getString(LakeSoulOptions.HASH_BUCKET_NUM()).equals("-1")) {
+        if (tableProperties.containsKey(LakeSoulOptions.HASH_BUCKET_NUM()) &&
+                tableProperties.getString(LakeSoulOptions.HASH_BUCKET_NUM()).equals("-1")) {
             return false;
         } else {
             return tableProperties.containsKey(LakeSoulOptions.HASH_BUCKET_NUM());
@@ -498,5 +534,54 @@ public class FlinkUtil {
     public static DateTimeFormatter DP_Kafka_DateTimeFormatter;
     static {
         DP_Kafka_DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS");
+    }
+
+    public static boolean hasHdfsClasses() {
+        try {
+            FlinkUtil.class.getClassLoader().loadClass("org.apache.flink.runtime.fs.hdfs.HadoopFileSystem");
+            FlinkUtil.class.getClassLoader().loadClass("org.apache.hadoop.hdfs.DistributedFileSystem");
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
+    }
+
+    public static boolean hasS3Classes() {
+        try {
+            FlinkUtil.class.getClassLoader().loadClass("org.apache.flink.fs.s3.common.FlinkS3FileSystem");
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
+    }
+
+    public static void createAndSetTableDirPermission(Path p) throws IOException {
+        // TODO: move these to native io
+        // currently we only support setting owner and permission for HDFS.
+        // S3 support will be added later
+        if (!hasHdfsClasses()) return;
+
+        FileSystem fs = p.getFileSystem();
+        if (fs instanceof HadoopFileSystem) {
+            String userName = DBUtil.getUser();
+            String domain = DBUtil.getDomain();
+            if (userName == null || domain.equals("public")) return;
+
+            HadoopFileSystem hfs = (HadoopFileSystem) fs;
+            org.apache.hadoop.fs.FileSystem hdfs = hfs.getHadoopFileSystem();
+            org.apache.hadoop.fs.Path nsDir = HadoopFileSystem.toHadoopPath(p.getParent());
+            if (!hdfs.exists(nsDir)) {
+                hdfs.mkdirs(nsDir);
+                hdfs.setOwner(nsDir, userName, domain);
+                hdfs.setPermission(nsDir, new FsPermission(FsAction.ALL, FsAction.ALL, FsAction.NONE));
+            }
+            org.apache.hadoop.fs.Path tbDir = HadoopFileSystem.toHadoopPath(p);
+            if (hdfs.exists(tbDir)) {
+                throw new IOException("Table directory already exists: " + tbDir.toString());
+            }
+            hdfs.mkdirs(tbDir);
+            hdfs.setOwner(tbDir, userName, domain);
+            hdfs.setPermission(tbDir, new FsPermission(FsAction.ALL, FsAction.READ_EXECUTE, FsAction.NONE));
+        }
     }
 }

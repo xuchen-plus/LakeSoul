@@ -826,7 +826,7 @@ public class DBManager {
         CommitOp commitOp = dataCommitInfo.getCommitOp();
         DataCommitInfo metaCommitInfo = dataCommitInfoDao.selectByPrimaryKey(tableId, partitionDesc, DBUtil.toJavaUUID(commitId).toString());
         if (metaCommitInfo != null && metaCommitInfo.getCommitted()) {
-            LOG.info("DataCommitInfo with tableId={}, commitId={} committed already", tableId, commitId.toString());
+            LOG.info("DataCommitInfo with tableId={}, commitId={} committed already", tableId, commitId);
             return;
         } else if (metaCommitInfo == null) {
             dataCommitInfo = dataCommitInfo.toBuilder()
