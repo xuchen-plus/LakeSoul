@@ -66,19 +66,6 @@ public class LakeSoulMultiTableSinkWriter extends AbstractLakeSoulMultiTableSink
     }
 
     @Override
-    protected TableSchemaWriterCreator getOrCreateTableSchemaWriterCreator(TableSchemaIdentity identity) {
-        return perTableSchemaWriterCreator.computeIfAbsent(identity, identity1 -> {
-            try {
-                return TableSchemaWriterCreator.create(identity1.tableId, identity1.rowType,
-                        identity1.tableLocation, identity1.primaryKeys,
-                        identity1.partitionKeyList, conf);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        });
-    }
-
-    @Override
     protected List<Tuple2<TableSchemaIdentity, RowData>> extractTableSchemaAndRowData(BinarySourceRecord element) throws Exception {
         LakeSoulRowDataWrapper wrapper = element.getData();
         List<Tuple2<TableSchemaIdentity, RowData>> list = new ArrayList<>();
