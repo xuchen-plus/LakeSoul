@@ -51,7 +51,7 @@ pub struct LakeSoulIOConfig {
     // write row group max row num
     #[derivative(Default(value = "250000"))]
     pub(crate) max_row_group_size: usize,
-    #[derivative(Default(value = "2"))]
+    #[derivative(Default(value = "1"))]
     pub(crate) prefetch_size: usize,
 
     // arrow schema
@@ -315,6 +315,7 @@ pub fn create_session_context(config: &mut LakeSoulIOConfig) -> Result<SessionCo
 
     sess_conf.options_mut().optimizer.enable_round_robin_repartition = false; // if true, the record_batches poll from stream become unordered
     sess_conf.options_mut().optimizer.prefer_hash_join = false; //if true, panicked at 'range end out of bounds'
+    sess_conf.options_mut().execution.parquet.pushdown_filters = true;
 
     // limit memory for sort writer
     let runtime = RuntimeEnv::new(RuntimeConfig::new().with_memory_limit(128 * 1024 * 1024, 1.0))?;

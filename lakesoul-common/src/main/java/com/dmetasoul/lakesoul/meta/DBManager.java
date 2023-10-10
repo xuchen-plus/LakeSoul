@@ -169,6 +169,10 @@ public class DBManager {
         return tablePathIdDao.listAllPathByNamespace(tableNamespace);
     }
 
+    public List<TableInfo> getTableInfosByNamespace(String tableNamespace){
+        return tableInfoDao.selectByNamespace(tableNamespace);
+    }
+
     public TableInfo getTableInfoByPath(String tablePath) {
         return tableInfoDao.selectByTablePath(tablePath);
     }

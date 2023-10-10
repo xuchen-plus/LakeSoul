@@ -11,6 +11,7 @@ import com.dmetasoul.lakesoul.meta.DBUtil;
 import com.dmetasoul.lakesoul.meta.entity.Namespace;
 import com.dmetasoul.lakesoul.meta.entity.PartitionInfo;
 import com.dmetasoul.lakesoul.meta.entity.TableInfo;
+import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.lakesoul.table.LakeSoulDynamicTableFactory;
@@ -152,12 +153,26 @@ public class LakeSoulCatalog implements Catalog {
 
     @Override
     public List<String> listTables(String databaseName) throws CatalogException {
-        return dbManager.listTableNamesByNamespace(databaseName);
+        List<TableInfo> tifs = dbManager.getTableInfosByNamespace(databaseName);
+        List<String> tableNames = new ArrayList<>(100);
+        for (TableInfo item : tifs) {
+            if (FlinkUtil.isTable(item)) {
+                tableNames.add(item.getTableName());
+            }
+        }
+        return tableNames;
     }
 
     @Override
-    public List<String> listViews(String s) throws CatalogException {
-        throw new CatalogException("not supported now");
+    public List<String> listViews(String databaseName) throws CatalogException {
+        List<TableInfo> tifs = dbManager.getTableInfosByNamespace(databaseName);
+        List<String> tableNames = new ArrayList<>(100);
+        for (TableInfo item : tifs) {
+            if (FlinkUtil.isView(item)) {
+                tableNames.add(item.getTableName());
+            }
+        }
+        return tableNames;
     }
 
     @Override
@@ -192,12 +207,15 @@ public class LakeSoulCatalog implements Catalog {
             dbManager.deleteShortTableName(tableInfo.getTableName(), tableName, tablePath.getDatabaseName());
             dbManager.deleteDataCommitInfo(tableId);
             dbManager.deletePartitionInfoByTableId(tableId);
-            Path path = new Path(tableInfo.getTablePath());
-            try {
-                path.getFileSystem().delete(path, true);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
+            if(FlinkUtil.isTable(tableInfo)){
+                Path path = new Path(tableInfo.getTablePath());
+                try {
+                    path.getFileSystem().delete(path, true);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
             }
+
         } else {
             if (ignoreIfNotExists) {
                 return;
@@ -214,6 +232,7 @@ public class LakeSoulCatalog implements Catalog {
     @Override
     public void createTable(ObjectPath tablePath, CatalogBaseTable table, boolean ignoreIfExists)
             throws TableAlreadyExistException, DatabaseNotExistException, CatalogException {
+
         checkNotNull(tablePath);
         checkNotNull(table);
         TableSchema schema = table.getSchema();
@@ -246,7 +265,6 @@ public class LakeSoulCatalog implements Catalog {
         } else {
             cdcColumn = Optional.empty();
         }
-
         // adding hash bucket options
         if (!primaryKeys.isEmpty()) {
             if (Integer.parseInt(tableOptions.getOrDefault(HASH_BUCKET_NUM.key(), "-1")) <= 0) {
@@ -254,27 +272,39 @@ public class LakeSoulCatalog implements Catalog {
                         "Valid integer value for hashBucketNum property must be set for table with primary key");
             }
         }
-
+        String tableId = TABLE_ID_PREFIX + UUID.randomUUID();
+        String qualifiedPath = "";
+        String sparkSchema = FlinkUtil.toSparkSchema(schema, cdcColumn).json();
+        List<String> partitionKeys = Collections.emptyList();
+        if (table instanceof ResolvedCatalogTable) {
+            partitionKeys = ((ResolvedCatalogTable) table).getPartitionKeys();
+            String path = null;
+            if (tableOptions.containsKey(TABLE_PATH)) {
+                path = tableOptions.get(TABLE_PATH);
+            } else {
+                String flinkWarehouseDir = GlobalConfiguration.loadConfiguration().get(FLINK_WAREHOUSE_DIR);
+                if (null != flinkWarehouseDir) {
+                   path = String.join("/", flinkWarehouseDir, tablePath.getDatabaseName(), tablePath.getObjectName());
+                }
+            }
+            try {
+                FileSystem fileSystem = new Path(path).getFileSystem();
+                Path qp = new Path(path).makeQualified(fileSystem);
+                FlinkUtil.createAndSetTableDirPermission(qp);
+                qualifiedPath = qp.toString();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        if (table instanceof ResolvedCatalogView) {
+            tableOptions.put(LAKESOUL_VIEW.key(), "true");
+            tableOptions.put(LAKESOUL_VIEW_TYPE.key(),LAKESOUL_VIEW_TYPE.defaultValue());
+            tableOptions.put(VIEW_ORIGINAL_QUERY,((ResolvedCatalogView) table).getOriginalQuery());
+            tableOptions.put(VIEW_EXPANDED_QUERY,((ResolvedCatalogView) table).getExpandedQuery());
+        }
         String json = JSON.toJSONString(tableOptions);
         JSONObject properties = JSON.parseObject(json);
-        List<String> partitionKeys = ((ResolvedCatalogTable) table).getPartitionKeys();
         String tableName = tablePath.getObjectName();
-        String path = tableOptions.get(TABLE_PATH);
-        String qualifiedPath = "";
-
-        // make qualified path and create directories
-        try {
-            FileSystem fileSystem = new Path(path).getFileSystem();
-            Path qp = new Path(path).makeQualified(fileSystem);
-            FlinkUtil.createAndSetTableDirPermission(qp);
-            qualifiedPath = qp.toString();
-        } catch (IOException e) {
-            throw new CatalogException(e.getMessage(), e.getCause());
-        }
-
-        String tableId = TABLE_ID_PREFIX + UUID.randomUUID();
-
-        String sparkSchema = FlinkUtil.toSparkSchema(schema, cdcColumn).json();
         dbManager.createNewTable(tableId, tablePath.getDatabaseName(), tableName, qualifiedPath, sparkSchema,
                 properties, DBUtil.formatTableInfoPartitionsField(primaryKeys, partitionKeys));
     }

@@ -28,6 +28,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -45,6 +46,10 @@ public class TableInfoDao {
         }
         String sql = String.format("select * from table_info where table_id = '%s'", tableId);
         return getTableInfo(sql);
+    }
+    public List<TableInfo> selectByNamespace(String namespace){
+        String sql = String.format("select * from table_info where table_namespace='%s'", namespace);
+        return getTableInfos(sql);
     }
 
     public TableInfo selectByTableNameAndNameSpace(String tableName, String namespace) {
@@ -113,6 +118,27 @@ public class TableInfoDao {
         }
         return tableInfo;
     }
+    private List<TableInfo> getTableInfos(String sql) {
+        Connection conn = null;
+        PreparedStatement pstmt = null;
+        ResultSet rs = null;
+        ArrayList<TableInfo> tableinfos = new ArrayList<>(100);
+        TableInfo tableInfo = null;
+        try {
+            conn = DBConnector.getConn();
+            pstmt = conn.prepareStatement(sql);
+            rs = pstmt.executeQuery();
+            while (rs.next()) {
+                tableInfo = tableInfoFromResultSet(rs);
+                tableinfos.add(tableInfo);
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        } finally {
+            DBConnector.closeConn(rs, pstmt, conn);
+        }
+        return tableinfos;
+    }
 
     public void insert(TableInfo tableInfo) {
         if (NativeUtils.NATIVE_METADATA_UPDATE_ENABLED) {
@@ -165,7 +191,6 @@ public class TableInfoDao {
             Integer count = NativeMetadataJavaClient.update(
                     NativeUtils.CodedDaoType.DeleteTableInfoByIdAndPath,
                     Arrays.asList(tableId, tablePath));
-            System.out.println("DeleteTableInfoByIdAndPath " + tableId + " " + tablePath + " result = " + count);
             return;
         }
         Connection conn = null;
