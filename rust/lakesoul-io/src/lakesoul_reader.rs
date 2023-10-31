@@ -300,14 +300,23 @@ mod tests {
     #[test]
     fn test_reader_s3_blocked() -> Result<()> {
         let reader_conf = LakeSoulIOConfigBuilder::new()
-            .with_files(vec!["s3://path/to/file.parquet".to_string()])
+            .with_files(vec!["s3://lakesoul-test-bucket/data/benchmark/parquet-scan/part-00000-eafb2afb-20e9-4ac2-805a-9bd4a8118dd4-c000.parquet".to_string()])
             .with_thread_num(1)
             .with_batch_size(8192)
-            .with_object_store_option(String::from("fs.s3a.access.key"), String::from("fs.s3.access.key"))
-            .with_object_store_option(String::from("fs.s3a.secret.key"), String::from("fs.s3.secret.key"))
+            .with_object_store_option(String::from("fs.s3a.access.key"), String::from("minioadmin1"))
+            .with_object_store_option(String::from("fs.s3a.secret.key"), String::from("minioadmin1"))
             .with_object_store_option(String::from("fs.s3a.region"), String::from("us-east-1"))
-            .with_object_store_option(String::from("fs.s3a.bucket"), String::from("fs.s3.bucket"))
-            .with_object_store_option(String::from("fs.s3a.endpoint"), String::from("fs.s3.endpoint"))
+            .with_object_store_option(String::from("fs.s3a.endpoint"), String::from("http://localhost:9000"))
+            .with_schema(Arc::new(Schema::new(vec![
+                Field::new("uuid", DataType::Utf8, false),
+                Field::new("ip", DataType::Utf8, true),
+                Field::new("hostname", DataType::Utf8, true),
+                Field::new("requests", DataType::Int64, true),
+                Field::new("name", DataType::Utf8, true),
+                Field::new("city", DataType::Utf8, true),
+                Field::new("job", DataType::Utf8, true),
+                Field::new("phonenum", DataType::Utf8, true),
+            ])))
             .build();
         let reader = LakeSoulReader::new(reader_conf)?;
         let runtime = Builder::new_multi_thread()
@@ -328,10 +337,10 @@ mod tests {
                     let num_rows = &rb.unwrap().num_rows();
                     unsafe {
                         ROW_CNT = ROW_CNT + num_rows;
-                        println!("{}", ROW_CNT);
+                        // println!("{}", ROW_CNT);
                     }
 
-                    thread::sleep(Duration::from_millis(20));
+                    // thread::sleep(Duration::from_millis(20));
                     tx.send(false).unwrap();
                 }
             };
@@ -339,7 +348,7 @@ mod tests {
             let done = rx.recv().unwrap();
 
             if done {
-                println!("time cost: {:?} ms", start.elapsed().as_millis()); // ms
+                unsafe { println!("Total read row count: {}, time cost: {:?} ms", ROW_CNT, start.elapsed().as_millis()); } // ms
                 break;
             }
         }
