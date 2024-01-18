@@ -4,6 +4,7 @@
 
 package org.apache.spark.sql.lakesoul.catalog
 
+import com.dmetasoul.lakesoul.meta.DataFileInfo
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{SparkSession, sources}
@@ -17,7 +18,7 @@ import org.apache.spark.sql.execution.datasources.v2.merge.{MultiPartitionMergeB
 import org.apache.spark.sql.execution.datasources.v2.parquet.{EmptyParquetScan, NativeParquetScan, ParquetScan, StreamParquetScan}
 import org.apache.spark.sql.internal.SQLConf.LegacyBehaviorPolicy
 import org.apache.spark.sql.lakesoul.sources.LakeSoulSQLConf
-import org.apache.spark.sql.lakesoul.utils.{DataFileInfo, SparkUtil, TableInfo}
+import org.apache.spark.sql.lakesoul.utils.{SparkUtil, TableInfo}
 import org.apache.spark.sql.lakesoul.{LakeSoulFileIndexV2, LakeSoulUtils}
 import org.apache.spark.sql.sources.Filter
 import org.apache.spark.sql.types.StructType
@@ -137,6 +138,13 @@ case class LakeSoulScanBuilder(sparkSession: SparkSession,
     }
   }
 
+  override def readPartitionSchema(): StructType = {
+    if (options.getBoolean("isCompaction", false)) {
+      StructType(Seq.empty)
+    } else {
+      super.readPartitionSchema()
+    }
+  }
 
   private def parquetScan(): Scan = {
     if (sparkSession.sessionState.conf.getConf(LakeSoulSQLConf.NATIVE_IO_ENABLE)) {

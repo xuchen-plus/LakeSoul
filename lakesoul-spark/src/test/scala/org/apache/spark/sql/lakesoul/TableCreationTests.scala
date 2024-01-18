@@ -4,6 +4,7 @@
 
 package org.apache.spark.sql.lakesoul
 
+import com.dmetasoul.lakesoul.meta.DataFileInfo
 import com.dmetasoul.lakesoul.tables.LakeSoulTable
 import org.apache.hadoop.fs.Path
 import org.apache.spark.SparkException
@@ -17,7 +18,7 @@ import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.lakesoul.catalog.LakeSoulCatalog
 import org.apache.spark.sql.lakesoul.sources.LakeSoulSourceUtils
 import org.apache.spark.sql.lakesoul.test.{LakeSoulSQLCommandTest, LakeSoulTestUtils}
-import org.apache.spark.sql.lakesoul.utils.{DataFileInfo, SparkUtil}
+import org.apache.spark.sql.lakesoul.utils.SparkUtil
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.Utils
@@ -874,10 +875,10 @@ trait TableCreationTests
           val snapshotManagement = getSnapshotManagement(new Path(location.get))
 
           assert(snapshotManagement.snapshot.getTableInfo.schema == new StructType()
-            .add("a", "integer", false).add("b", "integer", false)
+            .add("a", "integer", nullable = true).add("b", "integer", nullable = true)
             .add("c", "integer").add("d", "integer"))
           assert(snapshotManagement.snapshot.getTableInfo.partition_schema == new StructType()
-            .add("a", "integer", false).add("b", "integer", false))
+            .add("a", "integer", nullable = true).add("b", "integer", nullable = true))
 
           assert(getSchema("t1") == StructType(snapshotManagement.snapshot.getTableInfo.data_schema
             ++ snapshotManagement.snapshot.getTableInfo.range_partition_schema))
@@ -1184,7 +1185,7 @@ trait TableCreationTests
     withTempPath { dir =>
       val tableName = "test_table"
       withTable(s"$tableName") {
-        spark.sql(s"CREATE TABLE $tableName(id string, date string, data string) USING lakesoul" +
+        spark.sql(s"CREATE TABLE $tableName(id string not null, date string, data string) USING lakesoul" +
           s" PARTITIONED BY (date)" +
           s" LOCATION '${dir.toURI}'" +
           s" TBLPROPERTIES('lakesoul_cdc_change_column'='change_kind'," +
@@ -1200,6 +1201,25 @@ trait TableCreationTests
         assert(tableInfo.range_partition_columns.equals(Seq("date")))
         assert(tableInfo.hash_partition_columns.equals(Seq("id")))
         assert(tableInfo.bucket_num == 2)
+      }
+    }
+  }
+
+  test("create table sql with range and hash partition - fails when hash partition is nullable") {
+    withTempPath { dir =>
+      val tableName = "test_table"
+      withTable(s"$tableName") {
+        val e = intercept[AnalysisException] {
+          spark.sql(s"CREATE TABLE $tableName(id string, date string, data string) USING lakesoul" +
+            s" PARTITIONED BY (date)" +
+            s" LOCATION '${dir.toURI}'" +
+            s" TBLPROPERTIES('lakesoul_cdc_change_column'='change_kind'," +
+            s" 'hashPartitions'='id'," +
+            s" 'hashBucketNum'='2')")
+        }
+        assert(e.getMessage.contains(tableName))
+        assert(e.getMessage.contains("The hash partitions"))
+        assert(e.getMessage.contains("contains nullable column."))
       }
     }
   }

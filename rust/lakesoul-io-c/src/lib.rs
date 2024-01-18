@@ -7,15 +7,15 @@
 extern crate core;
 
 use core::ffi::{c_ptrdiff_t, c_size_t};
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::ptr::NonNull;
 use std::slice;
 use std::sync::Arc;
 
+use arrow::array::Array;
 pub use arrow::array::StructArray;
-use arrow::array::{Array, ArrayData};
 use arrow::datatypes::Schema;
-use arrow::ffi::ArrowArray;
+use arrow::ffi::from_ffi;
 pub use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 
 use lakesoul_io::lakesoul_io_config::{LakeSoulIOConfig, LakeSoulIOConfigBuilder};
@@ -335,12 +335,7 @@ fn call_result_callback(callback: ResultCallback, status: bool, err: *const c_ch
     }
 }
 
-fn call_data_result_callback(
-    callback: DataResultCallback,
-    status: bool,
-    err: *const c_char,
-    data: Cvoid,
-) {
+fn call_data_result_callback(callback: DataResultCallback, status: bool, err: *const c_char, data: Cvoid) {
     // release error string
     callback(status, err, data.data);
     if !err.is_null() {
@@ -363,12 +358,7 @@ fn call_i32_result_callback(callback: I32ResultCallback, status: i32, err: *cons
     }
 }
 
-fn call_i32_data_result_callback(
-    callback: I32DataResultCallback,
-    status: i32,
-    err: *const c_char,
-    data: Cvoid,
-) {
+fn call_i32_data_result_callback(callback: I32DataResultCallback, status: i32, err: *const c_char, data: Cvoid) {
     callback(status, err, data.data);
     // release error string
     if !err.is_null() {
@@ -402,7 +392,7 @@ pub extern "C" fn start_reader_with_data(
 ) {
     unsafe {
         let mut reader = NonNull::new_unchecked(reader.as_ref().ptr as *mut SyncSendableMutableLakeSoulReader);
-        let data = Cvoid {data};
+        let data = Cvoid { data };
         let result = reader.as_mut().start_blocked();
         match result {
             Ok(_) => call_data_result_callback(callback, true, std::ptr::null(), data),
@@ -465,6 +455,39 @@ pub extern "C" fn next_record_batch(
     }
 }
 
+#[no_mangle]
+pub extern "C" fn next_record_batch_blocked(
+    reader: NonNull<CResult<Reader>>,
+    array_addr: c_ptrdiff_t,
+    count: *mut c_int,
+) -> *const c_char {
+    unsafe {
+        let reader = NonNull::new_unchecked(reader.as_ref().ptr as *mut SyncSendableMutableLakeSoulReader);
+        let result = reader.as_ref().next_rb_blocked();
+        match result {
+            None => {
+                *count = 0;
+                std::ptr::null()
+            }
+            Some(rb_result) => match rb_result {
+                Err(e) => {
+                    *count = -1;
+                    CString::new(format!("{}", e).as_str()).unwrap().into_raw()
+                }
+                Ok(rb) => {
+                    let rows = rb.num_rows() as i32;
+                    let batch: Arc<StructArray> = Arc::new(rb.into());
+                    let ffi_array = FFI_ArrowArray::new(&batch.to_data());
+                    (&ffi_array as *const FFI_ArrowArray).copy_to(array_addr as *mut FFI_ArrowArray, 1);
+                    std::mem::forget(ffi_array);
+                    *count = rows;
+                    std::ptr::null()
+                }
+            },
+        }
+    }
+}
+
 // accept a callback with arbitrary user data pointer
 
 struct Cvoid {
@@ -483,7 +506,7 @@ pub extern "C" fn next_record_batch_with_data(
 ) {
     unsafe {
         let reader = NonNull::new_unchecked(reader.as_ref().ptr as *mut SyncSendableMutableLakeSoulReader);
-        let data = Cvoid {data};
+        let data = Cvoid { data };
         let f = move |rb: Option<Result<RecordBatch>>| match rb {
             None => {
                 call_i32_data_result_callback(callback, 0, std::ptr::null(), data);
@@ -585,9 +608,8 @@ pub extern "C" fn write_record_batch(
         (array_addr as *mut FFI_ArrowArray).copy_to(&mut ffi_array as *mut FFI_ArrowArray, 1);
         let mut ffi_schema = FFI_ArrowSchema::empty();
         (schema_addr as *mut FFI_ArrowSchema).copy_to(&mut ffi_schema as *mut FFI_ArrowSchema, 1);
-        let array = ArrowArray::new(ffi_array, ffi_schema);
         let result_fn = move || {
-            let array_data = ArrayData::try_from(array)?;
+            let array_data = from_ffi(ffi_array, &ffi_schema)?;
             let struct_array = StructArray::from(array_data);
             let rb = RecordBatch::from(struct_array);
             writer.as_ref().write_batch(rb)?;
@@ -601,6 +623,34 @@ pub extern "C" fn write_record_batch(
                 false,
                 CString::new(format!("{}", e).as_str()).unwrap().into_raw(),
             ),
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn write_record_batch_blocked(
+    writer: NonNull<CResult<Writer>>,
+    schema_addr: c_ptrdiff_t,
+    array_addr: c_ptrdiff_t,
+) -> *const c_char  {
+    unsafe {
+        let writer = NonNull::new_unchecked(writer.as_ref().ptr as *mut SyncSendableMutableLakeSoulWriter);
+        let mut ffi_array = FFI_ArrowArray::empty();
+        (array_addr as *mut FFI_ArrowArray).copy_to(&mut ffi_array as *mut FFI_ArrowArray, 1);
+        let mut ffi_schema = FFI_ArrowSchema::empty();
+        (schema_addr as *mut FFI_ArrowSchema).copy_to(&mut ffi_schema as *mut FFI_ArrowSchema, 1);
+        let result_fn = move || {
+            let array_data = from_ffi(ffi_array, &ffi_schema)?;
+            let struct_array = StructArray::from(array_data);
+            let rb = RecordBatch::from(struct_array);
+            writer.as_ref().write_batch(rb)?;
+            Ok(())
+        };
+        let result: lakesoul_io::Result<()> = result_fn();
+        match result {
+            Ok(_) => std::ptr::null(),
+            Err(e) =>
+                CString::new(format!("{}", e).as_str()).unwrap().into_raw(),
         }
     }
 }

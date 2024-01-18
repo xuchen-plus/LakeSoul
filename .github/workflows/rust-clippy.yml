@@ -5,18 +5,18 @@
 on:
   push:
     paths:
-      - "native-io/**"
+      - "rust/**"
     branches:
       - 'main'
   pull_request:
     paths:
-      - "native-io/**"
+      - "rust/**"
     branches:
       - 'main'
       - 'release/**'
   workflow_dispatch:
 
-name: Clippy check
+name: Rust Clippy Check
 
 # Make sure CI fails on all warnings, including Clippy lints
 env:
@@ -26,7 +26,7 @@ jobs:
   clippy_check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -42,5 +42,5 @@ jobs:
           workspaces: "./rust -> target"
           key: "ubuntu-latest-clippy"
       - name: Run Clippy
-        run: cd rust && cargo clippy --all-features --package lakesoul-io-c --package lakesoul-metadata-c
+        run: cd rust && cargo clippy --no-deps --all-features --package lakesoul-io-c --package lakesoul-metadata-c
 

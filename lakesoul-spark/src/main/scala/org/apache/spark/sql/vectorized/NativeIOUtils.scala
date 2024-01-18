@@ -9,8 +9,8 @@ import com.dmetasoul.lakesoul.meta.DBUtil
 import org.apache.arrow.vector.{ValueVector, VectorSchemaRoot}
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.permission.{FsAction, FsPermission}
-import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.hadoop.fs.s3a.S3AFileSystem
+import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.hadoop.hdfs.DistributedFileSystem
 import org.apache.hadoop.mapreduce.TaskAttemptContext
 import org.apache.parquet.hadoop.ParquetInputFormat
@@ -31,7 +31,8 @@ class NativeIOOptions(val s3Bucket: String,
                       val s3Endpoint: String,
                       val s3Region: String,
                       val fsUser: String,
-                      val defaultFS: String
+                      val defaultFS: String,
+                      val virtual_path_style: Boolean
                      )
 
 object NativeIOUtils{
@@ -46,12 +47,12 @@ object NativeIOUtils{
       .toArray
   }
 
-  private def asArrowColumnVector(vector: ValueVector): org.apache.spark.sql.arrow.ArrowColumnVector = {
-    new org.apache.spark.sql.arrow.ArrowColumnVector(vector)
+  private def asArrowColumnVector(vector: ValueVector): ColumnVector = {
+    GlutenUtils.createArrowColumnVector(vector)
   }
 
   private def asColumnVector(vector: ValueVector): ColumnVector = {
-    asArrowColumnVector(vector).asInstanceOf[ColumnVector]
+    asArrowColumnVector(vector)
   }
 
   def getNativeIOOptions(taskAttemptContext: TaskAttemptContext, file: Path): NativeIOOptions = {
@@ -69,11 +70,12 @@ object NativeIOUtils{
           val s3aRegion = taskAttemptContext.getConfiguration.get("fs.s3a.endpoint.region")
           val s3aAccessKey = taskAttemptContext.getConfiguration.get("fs.s3a.access.key")
           val s3aSecretKey = taskAttemptContext.getConfiguration.get("fs.s3a.secret.key")
-          return new NativeIOOptions(awsS3Bucket, s3aAccessKey, s3aSecretKey, s3aEndpoint, s3aRegion, user, defaultFS)
+          val virtualPathStyle = taskAttemptContext.getConfiguration.getBoolean("fs.s3a.path.style.access", false)
+          return new NativeIOOptions(awsS3Bucket, s3aAccessKey, s3aSecretKey, s3aEndpoint, s3aRegion, user, defaultFS, virtualPathStyle)
         case _ =>
       }
     }
-    new NativeIOOptions(null, null, null, null, null, user, defaultFS)
+    new NativeIOOptions(null, null, null, null, null, user, defaultFS, false)
   }
 
   def setNativeIOOptions(nativeIO: NativeIOBase, options: NativeIOOptions): Unit = {
@@ -84,7 +86,8 @@ object NativeIOUtils{
       options.s3Bucket,
       options.s3Endpoint,
       options.fsUser,
-      options.defaultFS
+      options.defaultFS,
+      options.virtual_path_style
     )
   }
 

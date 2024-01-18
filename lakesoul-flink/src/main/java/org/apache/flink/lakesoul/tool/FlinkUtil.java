@@ -8,7 +8,10 @@ import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.dmetasoul.lakesoul.lakesoul.io.NativeIOBase;
 import com.dmetasoul.lakesoul.meta.*;
+import com.dmetasoul.lakesoul.meta.dao.TableInfoDao;
 import com.dmetasoul.lakesoul.meta.entity.TableInfo;
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.core.fs.FileSystem;
@@ -82,6 +85,75 @@ public class FlinkUtil {
 
     public static String getRangeValue(CatalogPartitionSpec cps) {
         return "Null";
+    }
+
+    public static org.apache.arrow.vector.types.pojo.Schema toArrowSchema(RowType rowType, Optional<String> cdcColumn) throws CatalogException {
+        List<Field> fields = new ArrayList<>();
+        String cdcColName = null;
+        if (cdcColumn.isPresent()) {
+            cdcColName = cdcColumn.get();
+            Field cdcField = ArrowUtils.toArrowField(cdcColName, new VarCharType(false, 16));
+            fields.add(cdcField);
+        }
+
+        for (RowType.RowField field : rowType.getFields()) {
+            String name = field.getName();
+            if (name.equals(SORT_FIELD)) continue;
+
+            LogicalType logicalType = field.getType();
+            Field arrowField = ArrowUtils.toArrowField(name, logicalType);
+            if (name.equals(cdcColName)) {
+                if (!arrowField.toString().equals(fields.get(0).toString())) {
+                    throw new CatalogException(CDC_CHANGE_COLUMN +
+                            "=" +
+                            cdcColName +
+                            "has an invalid field of" +
+                            field +
+                            "," +
+                            CDC_CHANGE_COLUMN +
+                            " require field of " +
+                            fields.get(0).toString());
+                }
+            } else {
+                fields.add(arrowField);
+            }
+        }
+        return new org.apache.arrow.vector.types.pojo.Schema(fields);
+    }
+
+    public static org.apache.arrow.vector.types.pojo.Schema toArrowSchema(TableSchema tsc, Optional<String> cdcColumn) throws CatalogException {
+        List<Field> fields = new ArrayList<>();
+        String cdcColName = null;
+        if (cdcColumn.isPresent()) {
+            cdcColName = cdcColumn.get();
+            Field cdcField = ArrowUtils.toArrowField(cdcColName, new VarCharType(false, 16));
+            fields.add(cdcField);
+        }
+
+        for (int i = 0; i < tsc.getFieldCount(); i++) {
+            String name = tsc.getFieldName(i).get();
+            DataType dt = tsc.getFieldDataType(i).get();
+            if (name.equals(SORT_FIELD)) continue;
+
+            LogicalType logicalType = dt.getLogicalType();
+            Field arrowField = ArrowUtils.toArrowField(name, logicalType);
+            if (name.equals(cdcColName)) {
+                if (!arrowField.toString().equals(fields.get(0).toString())) {
+                    throw new CatalogException(CDC_CHANGE_COLUMN +
+                            "=" +
+                            cdcColName +
+                            "has an invalid field of" +
+                            arrowField +
+                            "," +
+                            CDC_CHANGE_COLUMN +
+                            " require field of " +
+                            fields.get(0).toString());
+                }
+            } else {
+                fields.add(arrowField);
+            }
+        }
+        return new org.apache.arrow.vector.types.pojo.Schema(fields);
     }
 
     public static StructType toSparkSchema(RowType rowType, Optional<String> cdcColumn) throws CatalogException {
@@ -281,10 +353,18 @@ public class FlinkUtil {
         String tableSchema = tableInfo.getTableSchema();
         JSONObject properties = JSON.parseObject(tableInfo.getProperties());
 
-        StructType struct = (StructType) org.apache.spark.sql.types.DataType.fromJson(tableSchema);
-        org.apache.arrow.vector.types.pojo.Schema
-                arrowSchema =
-                org.apache.spark.sql.arrow.ArrowUtils.toArrowSchema(struct, ZoneId.of("UTC").toString());
+        org.apache.arrow.vector.types.pojo.Schema arrowSchema = null;
+        System.out.println(tableSchema);
+        if (TableInfoDao.isArrowKindSchema(tableSchema)) {
+            try {
+                arrowSchema = org.apache.arrow.vector.types.pojo.Schema.fromJSON(tableSchema);
+            } catch (IOException e) {
+                throw new CatalogException(e);
+            }
+        } else {
+            StructType struct = (StructType) org.apache.spark.sql.types.DataType.fromJson(tableSchema);
+            arrowSchema = org.apache.spark.sql.arrow.ArrowUtils.toArrowSchema(struct, ZoneId.of("UTC").toString());
+        }
         RowType rowType = ArrowUtils.fromArrowSchema(arrowSchema);
         Builder bd = Schema.newBuilder();
 
@@ -409,10 +489,13 @@ public class FlinkUtil {
         setFSConf(conf, "fs.s3a.secret.key", "fs.s3a.secret.key", io);
         setFSConf(conf, "fs.s3a.endpoint", "fs.s3a.endpoint", io);
         setFSConf(conf, "fs.s3a.endpoint.region", "fs.s3a.endpoint.region", io);
+        setFSConf(conf, "fs.s3a.path.style.access", "fs.s3a.path.style.access", io);
         // try flink's s3 credential configs
         setFSConf(conf, "s3.access-key", "fs.s3a.access.key", io);
         setFSConf(conf, "s3.secret-key", "fs.s3a.secret.key", io);
         setFSConf(conf, "s3.endpoint", "fs.s3a.endpoint", io);
+        setFSConf(conf, "s3.endpoint.region", "fs.s3a.endpoint.region", io);
+        setFSConf(conf, "s3.path.style.access", "fs.s3a.path.style.access", io);
     }
 
     public static void setFSConf(Configuration conf, String confKey, String fsConfKey, NativeIOBase io) {
@@ -422,7 +505,6 @@ public class FlinkUtil {
             io.setObjectStoreOption(fsConfKey, value);
         }
     }
-
 
     public static Object convertStringToInternalValue(String valStr, LogicalType type) {
         if (valStr == null) {
@@ -466,11 +548,11 @@ public class FlinkUtil {
             List<String> partitionDescs = remainingPartitions.stream()
                     .map(DBUtil::formatPartitionDesc)
                     .collect(Collectors.toList());
-            List<PartitionInfo> partitionInfos = new ArrayList<>();
+            List<PartitionInfoScala> partitionInfos = new ArrayList<>();
             for (String partitionDesc : partitionDescs) {
                 partitionInfos.add(MetaVersion.getSinglePartitionInfo(tif.getTableId(), partitionDesc, ""));
             }
-            PartitionInfo[] ptinfos = partitionInfos.toArray(new PartitionInfo[0]);
+            PartitionInfoScala[] ptinfos = partitionInfos.toArray(new PartitionInfoScala[0]);
             return DataOperation.getTableDataInfo(ptinfos);
         }
     }
@@ -494,8 +576,8 @@ public class FlinkUtil {
     }
 
     public static DataFileInfo[] getSinglePartitionDataFileInfo(TableInfo tif, String partitionDesc) {
-        PartitionInfo partitionInfo = MetaVersion.getSinglePartitionInfo(tif.getTableId(), partitionDesc, "");
-        return DataOperation.getTableDataInfo(new PartitionInfo[]{partitionInfo});
+        PartitionInfoScala partitionInfo = MetaVersion.getSinglePartitionInfo(tif.getTableId(), partitionDesc, "");
+        return DataOperation.getTableDataInfo(new PartitionInfoScala[]{partitionInfo});
     }
 
     public static int[] getFieldPositions(String[] fields, List<String> allFields) {

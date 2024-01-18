@@ -25,10 +25,7 @@ import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.types.Metadata;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
-import org.apache.spark.sql.vectorized.ColumnVector;
-import org.apache.spark.sql.vectorized.ColumnarBatch;
-import org.apache.spark.sql.vectorized.NativeIOOptions;
-import org.apache.spark.sql.vectorized.NativeIOUtils;
+import org.apache.spark.sql.vectorized.*;
 
 import java.io.IOException;
 import java.time.ZoneId;
@@ -175,6 +172,7 @@ public class NativeVectorizedReader extends SpecificParquetRecordReaderBase<Obje
 
     @Override
     public void close() throws IOException {
+        closeCurrentBatch();
         if (columnarBatch != null) {
             columnarBatch.close();
             columnarBatch = null;
@@ -229,6 +227,7 @@ public class NativeVectorizedReader extends SpecificParquetRecordReaderBase<Obje
     private void recreateNativeReader() throws IOException {
         close();
         NativeIOReader reader = new NativeIOReader();
+        GlutenUtils.setArrowAllocator(reader);
         for (String path : filePathList) {
             reader.addFile(path);
         }
@@ -335,19 +334,15 @@ public class NativeVectorizedReader extends SpecificParquetRecordReaderBase<Obje
         closeCurrentBatch();
         if (nativeReader.hasNext()) {
             VectorSchemaRoot nextVectorSchemaRoot = nativeReader.nextResultVectorSchemaRoot();
-            if (nextVectorSchemaRoot == null) {
-                throw new IOException("nextVectorSchemaRoot not ready");
-            } else {
-                int rowCount = nextVectorSchemaRoot.getRowCount();
-                if (nextVectorSchemaRoot.getSchema().getFields().isEmpty()) {
-                    if (partitionColumnVectors == null) {
-                        throw new IOException("NativeVectorizedReader has not been initialized");
-                    }
-                    columnarBatch = new ColumnarBatch(partitionColumnVectors, rowCount);
-                } else {
-                    nativeColumnVector = NativeIOUtils.asArrayColumnVector(nextVectorSchemaRoot);
-                    columnarBatch = new ColumnarBatch(nativeColumnVector, rowCount);
+            int rowCount = nextVectorSchemaRoot.getRowCount();
+            if (nextVectorSchemaRoot.getSchema().getFields().isEmpty()) {
+                if (partitionColumnVectors == null) {
+                    throw new IOException("NativeVectorizedReader has not been initialized");
                 }
+                columnarBatch = new ColumnarBatch(partitionColumnVectors, rowCount);
+            } else {
+                nativeColumnVector = NativeIOUtils.asArrayColumnVector(nextVectorSchemaRoot);
+                columnarBatch = new ColumnarBatch(nativeColumnVector, rowCount);
             }
             return true;
         } else {
@@ -356,7 +351,6 @@ public class NativeVectorizedReader extends SpecificParquetRecordReaderBase<Obje
     }
 
     private void initializeInternal() throws IOException, UnsupportedOperationException {
-        recreateNativeReader();
         initBatch();
     }
 

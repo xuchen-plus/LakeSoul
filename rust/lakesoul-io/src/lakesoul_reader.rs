@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use atomic_refcell::AtomicRefCell;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::physical_plan::SendableRecordBatchStream;
 use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
@@ -14,22 +16,21 @@ pub use datafusion::error::{DataFusionError, Result};
 
 use datafusion::prelude::SessionContext;
 
-
-use core::pin::Pin;
-use datafusion::physical_plan::RecordBatchStream;
 use futures::StreamExt;
 
 use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
+use crate::datasource::file_format::LakeSoulParquetFormat;
+use crate::datasource::listing::LakeSoulListingTable;
+use crate::datasource::parquet_source::prune_filter_and_execute;
 use crate::lakesoul_io_config::{create_session_context, LakeSoulIOConfig};
-use crate::datasource::parquet_source::{LakeSoulParquetProvider, prune_filter_and_execute};
 
 pub struct LakeSoulReader {
     sess_ctx: SessionContext,
     config: LakeSoulIOConfig,
-    stream: Option<Pin<Box<dyn RecordBatchStream + Send>>>,
+    stream: Option<SendableRecordBatchStream>,
     pub(crate) schema: Option<SchemaRef>,
 }
 
@@ -51,12 +52,29 @@ impl LakeSoulReader {
                 "LakeSoulReader has wrong number of file".to_string(),
             ))
         } else {
-            let source = LakeSoulParquetProvider::from_config(self.config.clone());
-            let source = source.build_with_context(&self.sess_ctx).await.unwrap();
+            // let source = LakeSoulParquetProvider::from_config(self.config.clone());
+            // let source = source.build_with_context(&self.sess_ctx).await.unwrap();
+            let file_format = Arc::new(LakeSoulParquetFormat::new(
+                Arc::new(ParquetFormat::new()),
+                self.config.clone(),
+            ));
+            let source = LakeSoulListingTable::new_with_config_and_format(
+                &self.sess_ctx.state(),
+                self.config.clone(),
+                file_format,
+                false,
+            )
+            .await?;
 
             let dataframe = self.sess_ctx.read_table(Arc::new(source))?;
-            let stream = prune_filter_and_execute(dataframe, schema.clone(), self.config.filter_strs.clone(), self.config.batch_size).await?;
-            self.schema = Some(schema.clone());
+            let stream = prune_filter_and_execute(
+                dataframe,
+                schema.clone(),
+                self.config.filter_strs.clone(),
+                self.config.batch_size,
+            )
+            .await?;
+            self.schema = Some(stream.schema());
             self.stream = Some(stream);
 
             Ok(())
@@ -112,6 +130,16 @@ impl SyncSendableMutableLakeSoulReader {
         })
     }
 
+    pub fn next_rb_blocked(&self) -> Option<std::result::Result<RecordBatch, DataFusionError>> {
+        let inner_reader = self.get_inner_reader();
+        let runtime = self.get_runtime();
+        runtime.block_on(async move {
+            let reader = inner_reader.borrow();
+            let mut reader = reader.lock().await;
+            reader.next_rb().await
+        })
+    }
+
     pub fn get_schema(&self) -> Option<SchemaRef> {
         self.schema.clone()
     }
@@ -154,7 +182,7 @@ mod tests {
 
         while let Some(rb) = reader.next_rb().await {
             let num_rows = &rb.unwrap().num_rows();
-            row_cnt = row_cnt + num_rows;
+            row_cnt += num_rows;
         }
         assert_eq!(row_cnt, 1000);
         Ok(())
@@ -232,7 +260,7 @@ mod tests {
                     let rb = rb.unwrap();
                     let num_rows = &rb.num_rows();
                     unsafe {
-                        ROW_CNT = ROW_CNT + num_rows;
+                        ROW_CNT += num_rows;
                         println!("{}", ROW_CNT);
                     }
 
@@ -271,7 +299,7 @@ mod tests {
         while let Some(rb) = reader.next_rb().await {
             let num_rows = &rb.unwrap().num_rows();
             unsafe {
-                ROW_CNT = ROW_CNT + num_rows;
+                ROW_CNT += num_rows;
                 println!("{}", ROW_CNT);
             }
             sleep(Duration::from_millis(20)).await;

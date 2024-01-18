@@ -4,6 +4,7 @@
 
 package org.apache.spark.sql.lakesoul.schema
 
+import com.dmetasoul.lakesoul.meta.DataFileInfo
 import org.apache.hadoop.fs.Path
 
 import java.io.File
@@ -12,7 +13,7 @@ import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.lakesoul.SnapshotManagement
 import org.apache.spark.sql.lakesoul.test.LakeSoulSQLCommandTest
-import org.apache.spark.sql.lakesoul.utils.{DataFileInfo, SparkUtil}
+import org.apache.spark.sql.lakesoul.utils.SparkUtil
 import org.apache.spark.sql.streaming.{StreamingQuery, StreamingQueryException}
 import org.apache.spark.sql.test.{SQLTestUtils, SharedSparkSession}
 import org.apache.spark.sql.types.StructType
@@ -39,7 +40,7 @@ class CaseSensitivitySuite extends QueryTest
   }
 
   private def getPartitionValues(allFiles: Dataset[DataFileInfo], colName: String): Array[String] = {
-   allFiles.select(col(s"range_partitions")).distinct().as[String].collect()
+    allFiles.select(col(s"range_partitions")).distinct().as[String].collect()
   }
 
 
@@ -58,7 +59,7 @@ class CaseSensitivitySuite extends QueryTest
 
       val tableInfo = SnapshotManagement(path).getTableInfoOnly
       assert(tableInfo.schema == new StructType()
-        .add("Key", "int", false)
+        .add("Key", "int", nullable = true)
         .add("val", "string"))
       assert(tableInfo.range_column.equals("Key"))
 
@@ -80,7 +81,7 @@ class CaseSensitivitySuite extends QueryTest
 
       val tableInfo = SnapshotManagement(path).getTableInfoOnly
       assert(tableInfo.schema == new StructType()
-        .add("Key", "int", false)
+        .add("Key", "int", nullable = true)
         .add("val", "string"))
       assert(tableInfo.range_column.equals("Key"))
     }
@@ -103,7 +104,7 @@ class CaseSensitivitySuite extends QueryTest
       val tableInfo = SnapshotManagement(path).getTableInfoOnly
       assert(tableInfo.schema == new StructType()
         .add("Key", "int")
-        .add("val", "string", false))
+        .add("val", "string", nullable = true))
       assert(tableInfo.range_column.equals("val"))
 
     }
@@ -163,7 +164,6 @@ class CaseSensitivitySuite extends QueryTest
 
       Seq((1, "a", "1"), (2, "b", "2")).toDF("key", "val", "hash").write
         .partitionBy("key")
-        //        .option("rangePartitions","key")
         .option("hashPartitions", "hash")
         .option("hashBucketNum", 2)
         .format("lakesoul")
@@ -172,9 +172,9 @@ class CaseSensitivitySuite extends QueryTest
 
       val tableInfo = SnapshotManagement(path).getTableInfoOnly
       assert(tableInfo.schema == new StructType()
-        .add("key", "int", false)
+        .add("key", "int", nullable = true)
         .add("val", "string")
-        .add("hash", "string", false))
+        .add("hash", "string", nullable = false))
       assert(tableInfo.range_column.equals("key"))
       assert(tableInfo.hash_column.equals("hash"))
 
@@ -234,9 +234,9 @@ class CaseSensitivitySuite extends QueryTest
 
       val tableInfo = SnapshotManagement(path).getTableInfoOnly
       assert(tableInfo.schema == new StructType()
-        .add("key", "int", false)
+        .add("key", "int", nullable = true)
         .add("val", "string")
-        .add("hash", "string", false))
+        .add("hash", "string", nullable = false))
       assert(tableInfo.range_column.equals("key"))
       assert(tableInfo.hash_column.equals("hash"))
 
@@ -265,9 +265,9 @@ class CaseSensitivitySuite extends QueryTest
 
       val tableInfo = SnapshotManagement(path).getTableInfoOnly
       assert(tableInfo.schema == new StructType()
-        .add("key", "int", false)
+        .add("key", "int", nullable = true)
         .add("val", "string")
-        .add("hash", "string", false))
+        .add("hash", "string", nullable = false))
       assert(tableInfo.range_column.equals("key"))
       assert(tableInfo.hash_column.equals("hash"))
 

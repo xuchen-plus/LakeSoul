@@ -6,15 +6,17 @@ use arrow::error::ArrowError;
 use arrow_schema::{Schema, SchemaRef};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 pub use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::context::{QueryPlanner, SessionState};
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::logical_expr::Expr;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::DataFusionError::ObjectStore;
+use datafusion_common::DataFusionError::{External, ObjectStore};
 use derivative::Derivative;
 use object_store::aws::AmazonS3Builder;
-use object_store::RetryConfig;
+use object_store::{ClientOptions, RetryConfig};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use url::{ParseError, Url};
 
 #[cfg(feature = "hdfs")]
@@ -33,10 +35,16 @@ impl Default for IOSchema {
 #[derive(Debug, Derivative)]
 #[derivative(Default, Clone)]
 pub struct LakeSoulIOConfig {
+    // root dir path of files
+    pub(crate) prefix: String,
     // files to read or write
     pub(crate) files: Vec<String>,
     // primary key column names
     pub(crate) primary_keys: Vec<String>,
+    // range partitions column names
+    pub(crate) range_partitions: Vec<String>,
+    // number of hash bucket
+    pub(crate) hash_bucket_num: usize,
     // selecting columns
     pub(crate) columns: Vec<String>,
     // auxiliary sorting columns
@@ -53,6 +61,8 @@ pub struct LakeSoulIOConfig {
     pub(crate) max_row_group_size: usize,
     #[derivative(Default(value = "1"))]
     pub(crate) prefetch_size: usize,
+    #[derivative(Default(value = "false"))]
+    pub(crate) parquet_filter_pushdown: bool,
 
     // arrow schema
     pub(crate) schema: IOSchema,
@@ -74,7 +84,25 @@ pub struct LakeSoulIOConfig {
     pub(crate) default_fs: String,
 }
 
-#[derive(Derivative)]
+impl LakeSoulIOConfig {
+    pub fn schema(&self) -> SchemaRef {
+        self.schema.0.clone()
+    }
+
+    pub fn primary_keys_slice(&self) -> &[String] {
+        &self.primary_keys
+    }
+
+    pub fn files_slice(&self) -> &[String] {
+        &self.files
+    }
+
+    pub fn aux_sort_cols_slice(&self) -> &[String] {
+        &self.aux_sort_cols
+    }
+}
+
+#[derive(Derivative, Debug)]
 #[derivative(Clone, Default)]
 pub struct LakeSoulIOConfigBuilder {
     config: LakeSoulIOConfig,
@@ -85,6 +113,11 @@ impl LakeSoulIOConfigBuilder {
         LakeSoulIOConfigBuilder {
             config: LakeSoulIOConfig::default(),
         }
+    }
+
+    pub fn with_prefix(mut self, prefix: String) -> Self {
+        self.config.prefix = prefix;
+        self
     }
 
     pub fn with_file(mut self, file: String) -> Self {
@@ -104,6 +137,16 @@ impl LakeSoulIOConfigBuilder {
 
     pub fn with_primary_keys(mut self, pks: Vec<String>) -> Self {
         self.config.primary_keys = pks;
+        self
+    }
+
+    pub fn with_range_partitions(mut self, range_partitions: Vec<String>) -> Self {
+        self.config.range_partitions = range_partitions;
+        self
+    }
+
+    pub fn with_hash_bucket_num(mut self, hash_bucket_num: usize) -> Self {
+        self.config.hash_bucket_num = hash_bucket_num;
         self
     }
 
@@ -129,6 +172,11 @@ impl LakeSoulIOConfigBuilder {
 
     pub fn with_prefetch_size(mut self, prefetch_size: usize) -> Self {
         self.config.prefetch_size = prefetch_size;
+        self
+    }
+
+    pub fn with_parquet_filter_pushdown(mut self, enable: bool) -> Self {
+        self.config.parquet_filter_pushdown = enable;
         self
     }
 
@@ -162,8 +210,8 @@ impl LakeSoulIOConfigBuilder {
         self
     }
 
-    pub fn with_object_store_option(mut self, key: String, value: String) -> Self {
-        self.config.object_store_options.insert(key, value);
+    pub fn with_object_store_option(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.config.object_store_options.insert(key.into(), value.into());
         self
     }
 
@@ -174,6 +222,24 @@ impl LakeSoulIOConfigBuilder {
 
     pub fn build(self) -> LakeSoulIOConfig {
         self.config
+    }
+
+    pub fn schema(&self) -> SchemaRef {
+        self.config.schema()
+    }
+
+    pub fn primary_keys_slice(&self) -> &[String] {
+        self.config.primary_keys_slice()
+    }
+
+    pub fn aux_sort_cols_slice(&self) -> &[String] {
+        self.config.aux_sort_cols_slice()
+    }
+}
+
+impl From<LakeSoulIOConfig> for LakeSoulIOConfigBuilder {
+    fn from(val: LakeSoulIOConfig) -> Self {
+        LakeSoulIOConfigBuilder { config: val }
     }
 }
 
@@ -194,10 +260,32 @@ pub fn register_s3_object_store(url: &Url, config: &LakeSoulIOConfig, runtime: &
             .ok()
             .or_else(|| config.object_store_options.get("fs.s3a.endpoint.region").cloned())
     });
-    let endpoint = std::env::var("AWS_ENDPOINT")
+    let mut endpoint = std::env::var("AWS_ENDPOINT")
         .ok()
         .or_else(|| config.object_store_options.get("fs.s3a.endpoint").cloned());
     let bucket = config.object_store_options.get("fs.s3a.bucket").cloned();
+    let virtual_path_style = config.object_store_options.get("fs.s3a.path.style.access").cloned();
+    let virtual_path_style = virtual_path_style.is_some_and(|s| s == "true");
+    if !virtual_path_style {
+        if let (Some(endpoint_str), Some(bucket)) = (&endpoint, &bucket) {
+            // for host style access with endpoint defined, we need to check endpoint contains bucket name
+            if !endpoint_str.contains(bucket) {
+                let mut endpoint_url = Url::parse(endpoint_str.as_str()).map_err(|e| External(Box::new(e)))?;
+                endpoint_url
+                    .set_host(Some(&*format!(
+                        "{}.{}",
+                        bucket,
+                        endpoint_url.host_str().expect("endpoint should contains host")
+                    )))
+                    .map_err(|e| External(Box::new(e)))?;
+                let endpoint_s = endpoint_url.to_string();
+                endpoint = endpoint_s
+                    .strip_suffix('/')
+                    .map(|s| s.to_string())
+                    .or(Some(endpoint_s));
+            }
+        }
+    }
 
     if bucket.is_none() {
         return Err(DataFusionError::ArrowError(ArrowError::InvalidArgumentError(
@@ -210,6 +298,14 @@ pub fn register_s3_object_store(url: &Url, config: &LakeSoulIOConfig, runtime: &
         .with_region(region.unwrap_or_else(|| "us-east-1".to_owned()))
         .with_bucket_name(bucket.unwrap())
         .with_retry(retry_config)
+        .with_virtual_hosted_style_request(!virtual_path_style)
+        .with_client_options(
+            ClientOptions::new()
+                .with_allow_http(true)
+                .with_connect_timeout(Duration::from_secs(10))
+                .with_pool_idle_timeout(Duration::from_secs(300))
+                .with_timeout(Duration::from_secs(10)),
+        )
         .with_allow_http(true);
     if let (Some(k), Some(s)) = (key, secret) {
         s3_store_builder = s3_store_builder.with_access_key_id(k).with_secret_access_key(s);
@@ -308,14 +404,22 @@ fn register_object_store(path: &str, config: &mut LakeSoulIOConfig, runtime: &Ru
 }
 
 pub fn create_session_context(config: &mut LakeSoulIOConfig) -> Result<SessionContext> {
+    create_session_context_with_planner(config, None)
+}
+
+pub fn create_session_context_with_planner(
+    config: &mut LakeSoulIOConfig,
+    planner: Option<Arc<dyn QueryPlanner + Send + Sync>>,
+) -> Result<SessionContext> {
     let mut sess_conf = SessionConfig::default()
         .with_batch_size(config.batch_size)
-        .with_parquet_pruning(false)
+        .with_parquet_pruning(true)
         .with_prefetch(config.prefetch_size);
 
     sess_conf.options_mut().optimizer.enable_round_robin_repartition = false; // if true, the record_batches poll from stream become unordered
     sess_conf.options_mut().optimizer.prefer_hash_join = false; //if true, panicked at 'range end out of bounds'
-    sess_conf.options_mut().execution.parquet.pushdown_filters = true;
+    sess_conf.options_mut().execution.parquet.pushdown_filters = config.parquet_filter_pushdown;
+    // sess_conf.options_mut().execution.parquet.enable_page_index = true;
 
     // limit memory for sort writer
     let runtime = RuntimeEnv::new(RuntimeConfig::new().with_memory_limit(128 * 1024 * 1024, 1.0))?;
@@ -341,7 +445,13 @@ pub fn create_session_context(config: &mut LakeSoulIOConfig) -> Result<SessionCo
     config.files = normalized_filenames;
 
     // create session context
-    Ok(SessionContext::with_config_rt(sess_conf, Arc::new(runtime)))
+    let state = if let Some(planner) = planner {
+        SessionState::new_with_config_rt(sess_conf, Arc::new(runtime)).with_query_planner(planner)
+    } else {
+        SessionState::new_with_config_rt(sess_conf, Arc::new(runtime))
+    };
+
+    Ok(SessionContext::new_with_state(state))
 }
 
 #[cfg(test)]

@@ -13,6 +13,7 @@ import io.debezium.data.Enum;
 import io.debezium.data.EnumSet;
 import io.debezium.data.Envelope;
 import io.debezium.data.Json;
+import io.debezium.time.MicroDuration;
 import io.debezium.data.geometry.Geometry;
 import io.debezium.data.geometry.Point;
 import io.debezium.data.SpecialValueDecimal;
@@ -254,6 +255,8 @@ public class LakeSoulRecordConvert implements Serializable {
                 return new VarCharType(nullable, Integer.MAX_VALUE);
             case Time.SCHEMA_NAME:
             case MicroTime.SCHEMA_NAME:
+            case MicroDuration.SCHEMA_NAME:
+                return new BigIntType(nullable);
             case NanoTime.SCHEMA_NAME:
                 return new BigIntType(nullable);
             case Timestamp.SCHEMA_NAME:
@@ -272,6 +275,8 @@ public class LakeSoulRecordConvert implements Serializable {
             case ZonedTimestamp.SCHEMA_NAME:
                 return new LocalZonedTimestampType(nullable, LocalZonedTimestampType.DEFAULT_PRECISION);
             case Geometry.LOGICAL_NAME:
+            case VariableScaleDecimal.LOGICAL_NAME:
+                return new DecimalType(nullable, 38, 30);
             case Point.LOGICAL_NAME:
                 paras = fieldSchema.field("wkb").schema().parameters();
                 int byteLen = Integer.MAX_VALUE;
@@ -446,6 +451,12 @@ public class LakeSoulRecordConvert implements Serializable {
             case ZonedTimestamp.SCHEMA_NAME:
                 writeUTCTimeStamp(writer, index, fieldValue, fieldSchema);
                 break;
+            case VariableScaleDecimal.LOGICAL_NAME:
+                writeDecimal(writer, index, fieldValue, fieldSchema);
+                break;
+            case MicroDuration.SCHEMA_NAME:
+                writeLong(writer, index, fieldValue);
+                break;
             // Geometry and Point can not support now
 //            case Geometry.LOGICAL_NAME:
 //                Object object = convertToGeometry(fieldValue, fieldSchema);
@@ -497,7 +508,12 @@ public class LakeSoulRecordConvert implements Serializable {
             }
         }
         Map<String, String> paras = schema.parameters();
-        return DecimalData.fromBigDecimal(bigDecimal, Integer.parseInt(paras.get("connect.decimal.precision")), Integer.parseInt(paras.get("scale")));
+        if (paras == null){
+            return DecimalData.fromBigDecimal(bigDecimal, 38, 30);
+        }
+        else {
+            return DecimalData.fromBigDecimal(bigDecimal, Integer.parseInt(paras.get("connect.decimal.precision")), Integer.parseInt(paras.get("scale")));
+        }
     }
 
     public void writeDecimal(BinaryRowWriter writer, int index, Object dbzObj, Schema schema) {

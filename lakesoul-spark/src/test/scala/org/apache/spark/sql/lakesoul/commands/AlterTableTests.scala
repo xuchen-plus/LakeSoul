@@ -4,6 +4,7 @@
 
 package org.apache.spark.sql.lakesoul.commands
 
+import com.dmetasoul.lakesoul.meta.DataFileInfo
 import com.dmetasoul.lakesoul.tables.LakeSoulTable
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.catalyst.TableIdentifier
@@ -14,7 +15,7 @@ import org.apache.spark.sql.lakesoul.SnapshotManagement
 import org.apache.spark.sql.lakesoul.catalog.LakeSoulCatalog
 import org.apache.spark.sql.lakesoul.sources.LakeSoulSourceUtils
 import org.apache.spark.sql.lakesoul.test.{LakeSoulSQLCommandTest, LakeSoulTestUtils}
-import org.apache.spark.sql.lakesoul.utils.{DataFileInfo, SparkUtil}
+import org.apache.spark.sql.lakesoul.utils.SparkUtil
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.{AnalysisException, DataFrame, QueryTest}
@@ -319,7 +320,7 @@ trait AlterTableTests extends AlterTableLakeSoulTestBase {
 
       val snapshotManagement = getSnapshotManagement(tableName)
       assert(snapshotManagement.updateSnapshot().getTableInfo.schema == new StructType()
-        .add("v1", "integer").add("v2", "string", false)
+        .add("v1", "integer").add("v2", "string", nullable = true)
         .add("v3", "long").add("v4", "double"))
 
       checkDatasetUnorderly(
@@ -518,7 +519,7 @@ trait AlterTableTests extends AlterTableLakeSoulTestBase {
 
       val snapshotManagement = getSnapshotManagement(tableName)
       assert(snapshotManagement.updateSnapshot().getTableInfo.schema == new StructType()
-        .add("v1", "integer", true, "a comment").add("v2", "string"))
+        .add("v1", "integer", nullable = true, "a comment").add("v2", "string"))
     }
   }
 
@@ -529,7 +530,7 @@ trait AlterTableTests extends AlterTableLakeSoulTestBase {
 
       val snapshotManagement = getSnapshotManagement(tableName)
       assert(snapshotManagement.updateSnapshot().getTableInfo.schema == new StructType()
-        .add("v1", "integer").add("v2", "string", false, "a comment"))
+        .add("v1", "integer").add("v2", "string", nullable = true, "a comment"))
     }
   }
 
@@ -1169,7 +1170,7 @@ trait AlterTableByNameTests extends AlterTableTests {
         sql("ALTER TABLE lakesoul_test SET TBLPROPERTIES ('lakesoul_cdc_column'='cdc_change_kind')")
 
         val table = catalog.loadTable(Identifier.of(Array("default"), "lakesoul_test"))
-        getProperties(table) should contain ("lakesoul_cdc_column" -> "cdc_change_kind")
+        getProperties(table) should contain("lakesoul_cdc_column" -> "cdc_change_kind")
       }
     }
   }
@@ -1204,7 +1205,7 @@ trait AlterTableByPathTests extends AlterTableLakeSoulTestBase {
   override protected def getSnapshotManagement(identifier: String): SnapshotManagement = {
     SnapshotManagement(
       SparkUtil.makeQualifiedTablePath(new Path(identifier.split("\\.")
-      .last.stripPrefix("`").stripSuffix("`"))).toString)
+        .last.stripPrefix("`").stripSuffix("`"))).toString)
   }
 
   override protected def ddlTest(testName: String)(f: String => Unit): Unit = {

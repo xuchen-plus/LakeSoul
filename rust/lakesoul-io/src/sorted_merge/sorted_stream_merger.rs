@@ -28,7 +28,7 @@ pub(crate) struct SortedStream {
 
 impl Debug for SortedStream {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "InMemSorterStream")
+        write!(f, "InMemSortedStream")
     }
 }
 
@@ -195,7 +195,7 @@ impl SortedStreamMerger {
                         self.initialized[idx] = true;
                         let cols = self.column_expressions[idx]
                             .iter()
-                            .map(|expr| Ok(expr.evaluate(&batch)?.into_array(batch.num_rows())))
+                            .map(|expr| expr.evaluate(&batch)?.into_array(batch.num_rows()))
                             .collect::<Result<Vec<_>>>()?;
                         let rows = match self.row_converters[idx].convert_columns(&cols) {
                             Ok(rows) => rows,
@@ -271,7 +271,7 @@ impl SortedStreamMerger {
                     if !range.is_finished() {
                         self.range_combiner.push_range(Reverse(range))
                     } else {
-                        // we should mark this stream uninitalized
+                        // we should mark this stream uninitialized
                         // since its polling may return pending
                         self.initialized[stream_idx] = false;
                         self.range_finished[stream_idx] = true;
@@ -334,7 +334,7 @@ mod tests {
     #[tokio::test]
     async fn test_multi_file_merger() {
         let session_config = SessionConfig::default().with_batch_size(32);
-        let session_ctx = SessionContext::with_config(session_config);
+        let session_ctx = SessionContext::new_with_config(session_config);
         let project_dir = std::env::current_dir().unwrap();
         let files: Vec<String> = vec![
             project_dir
@@ -671,7 +671,6 @@ mod tests {
             Field::new("c", DataType::Int32, true),
         ]);
 
-
         let merge_stream = SortedStreamMerger::new_from_streams(
             vec![s1, s2, s3],
             Arc::new(schema),
@@ -687,7 +686,7 @@ mod tests {
     #[tokio::test]
     async fn test_sorted_stream_merger_with_sum_and_last() {
         let session_config = SessionConfig::default().with_batch_size(2);
-        let session_ctx = SessionContext::with_config(session_config);
+        let session_ctx = SessionContext::new_with_config(session_config);
         let task_ctx = session_ctx.task_ctx();
         let s1b1 = create_batch(
             vec!["id", "a", "b", "c"],

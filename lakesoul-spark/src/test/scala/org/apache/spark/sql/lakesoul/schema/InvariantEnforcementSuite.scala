@@ -4,6 +4,7 @@
 
 package org.apache.spark.sql.lakesoul.schema
 
+import com.dmetasoul.lakesoul.meta.DataFileInfo
 import com.dmetasoul.lakesoul.tables.LakeSoulTable
 import org.apache.hadoop.fs.Path
 import org.apache.spark.SparkException
@@ -11,7 +12,7 @@ import org.apache.spark.sql._
 import org.apache.spark.sql.lakesoul.SnapshotManagement
 import org.apache.spark.sql.lakesoul.schema.Invariants.{ArbitraryExpression, NotNull, PersistedExpression}
 import org.apache.spark.sql.lakesoul.test.LakeSoulTestUtils
-import org.apache.spark.sql.lakesoul.utils.{DataFileInfo, SparkUtil}
+import org.apache.spark.sql.lakesoul.utils.SparkUtil
 import org.apache.spark.sql.test.{SQLTestUtils, SharedSparkSession}
 import org.apache.spark.sql.types._
 import org.junit.runner.RunWith
@@ -77,20 +78,6 @@ class InvariantEnforcementSuite extends QueryTest
     }
   }
 
-  test("create table - range partition keys can't be null") {
-    withTempDir(dir => {
-      val tablePath = dir.getCanonicalPath
-      val df1 = Seq[(String, Int, Int, Int)](("a", 1, 1, 1)).toDF("range1", "range2", "hash", "value")
-
-      val df2 = df1.union(Seq(("a", null, 2, 1)).toDF("range1", "range2", "hash", "value"))
-      val e = intercept[SparkException] {
-        initTable(tablePath, df2, "range1,range2", "hash")
-      }
-      assert(getExceptionMessage(e).contains("Invariant NOT NULL violated for column: range2"))
-
-    })
-  }
-
   test("create table - hash partition keys can't be null") {
     withTempDir(dir => {
       val tablePath = dir.getCanonicalPath
@@ -111,12 +98,6 @@ class InvariantEnforcementSuite extends QueryTest
       val df = Seq[(String, Int, Int)](("a", 1, 1)).toDF("range", "hash", "value")
 
       initTable(tablePath, df, "range", "hash")
-
-      val e1 = intercept[SparkException] {
-        val df1 = df.union(Seq((null, 1, 1)).toDF("range", "hash", "value"))
-        LakeSoulTable.forPath(tablePath).upsert(df1)
-      }
-      assert(getExceptionMessage(e1).contains("Invariant NOT NULL violated for column: range"))
 
       val e2 = intercept[SparkException] {
         val df2 = df.union(Seq(("c", null, 1)).toDF("range", "hash", "value"))

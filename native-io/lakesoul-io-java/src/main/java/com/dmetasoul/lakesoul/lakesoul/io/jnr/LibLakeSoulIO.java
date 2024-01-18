@@ -9,15 +9,10 @@ import jnr.ffi.Pointer;
 import jnr.ffi.Runtime;
 import jnr.ffi.annotations.Delegate;
 import jnr.ffi.annotations.LongLong;
+import jnr.ffi.annotations.Out;
+import jnr.ffi.byref.IntByReference;
 
 public interface LibLakeSoulIO {
-
-    static Pointer buildStringPointer(LibLakeSoulIO lib, String s) {
-        Pointer str = Memory.allocate(Runtime.getRuntime(lib), s.length());
-        str.put(0, s.getBytes(),0,s.length());
-
-        return str;
-    }
 
     Pointer new_tokio_runtime_builder();
 
@@ -27,21 +22,21 @@ public interface LibLakeSoulIO {
 
     Pointer new_lakesoul_io_config_builder();
 
-    Pointer lakesoul_config_builder_add_single_file(Pointer builder, Pointer file);
+    Pointer lakesoul_config_builder_add_single_file(Pointer builder, String file);
 
-    Pointer lakesoul_config_builder_add_single_primary_key(Pointer builder, Pointer pk);
+    Pointer lakesoul_config_builder_add_single_primary_key(Pointer builder, String pk);
 
-    Pointer lakesoul_config_builder_add_single_column(Pointer builder, Pointer column);
+    Pointer lakesoul_config_builder_add_single_column(Pointer builder, String column);
 
-    Pointer lakesoul_config_builder_add_single_aux_sort_column(Pointer builder, Pointer column);
+    Pointer lakesoul_config_builder_add_single_aux_sort_column(Pointer builder, String column);
 
-    Pointer lakesoul_config_builder_add_filter(Pointer builder, Pointer filter);
+    Pointer lakesoul_config_builder_add_filter(Pointer builder, String filter);
 
-    Pointer lakesoul_config_builder_add_merge_op(Pointer builder, Pointer field, Pointer mergeOp);
+    Pointer lakesoul_config_builder_add_merge_op(Pointer builder, String field, String mergeOp);
 
     Pointer lakesoul_config_builder_set_schema(Pointer builder, @LongLong long schemaAddr);
 
-    Pointer lakesoul_config_builder_set_object_store_option(Pointer builder, Pointer key, Pointer value);
+    Pointer lakesoul_config_builder_set_object_store_option(Pointer builder, String key, String value);
 
     Pointer lakesoul_config_builder_set_thread_num(Pointer builder, int thread_num);
 
@@ -79,7 +74,11 @@ public interface LibLakeSoulIO {
 
     void next_record_batch(Pointer reader, @LongLong long schemaAddr, @LongLong long arrayAddr, IntegerCallback callback);
 
+    String next_record_batch_blocked(Pointer reader, @LongLong long arrayAddr, @Out IntByReference count);
+
     void write_record_batch(Pointer writer, @LongLong long schemaAddr, @LongLong long arrayAddr, BooleanCallback callback);
+
+    String write_record_batch_blocked(Pointer writer, @LongLong long schemaAddr, @LongLong long arrayAddr);
 
     void free_lakesoul_reader(Pointer reader);
 

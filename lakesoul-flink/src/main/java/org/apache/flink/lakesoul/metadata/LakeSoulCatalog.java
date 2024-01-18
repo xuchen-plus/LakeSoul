@@ -124,7 +124,7 @@ public class LakeSoulCatalog implements Catalog {
         List<String> tables = listTables(databaseName);
         if (!tables.isEmpty()) {
             if (cascade) {
-                for (String table: tables) {
+                for (String table : tables) {
                     try {
                         dropTable(new ObjectPath(databaseName, table), true);
                     } catch (TableNotExistException e) {
@@ -207,7 +207,7 @@ public class LakeSoulCatalog implements Catalog {
             dbManager.deleteShortTableName(tableInfo.getTableName(), tableName, tablePath.getDatabaseName());
             dbManager.deleteDataCommitInfo(tableId);
             dbManager.deletePartitionInfoByTableId(tableId);
-            if(FlinkUtil.isTable(tableInfo)){
+            if (FlinkUtil.isTable(tableInfo)) {
                 Path path = new Path(tableInfo.getTablePath());
                 try {
                     path.getFileSystem().delete(path, true);
@@ -274,7 +274,7 @@ public class LakeSoulCatalog implements Catalog {
         }
         String tableId = TABLE_ID_PREFIX + UUID.randomUUID();
         String qualifiedPath = "";
-        String sparkSchema = FlinkUtil.toSparkSchema(schema, cdcColumn).json();
+        String sparkSchema = FlinkUtil.toArrowSchema(schema, cdcColumn).toJson();
         List<String> partitionKeys = Collections.emptyList();
         if (table instanceof ResolvedCatalogTable) {
             partitionKeys = ((ResolvedCatalogTable) table).getPartitionKeys();
@@ -284,7 +284,7 @@ public class LakeSoulCatalog implements Catalog {
             } else {
                 String flinkWarehouseDir = GlobalConfiguration.loadConfiguration().get(FLINK_WAREHOUSE_DIR);
                 if (null != flinkWarehouseDir) {
-                   path = String.join("/", flinkWarehouseDir, tablePath.getDatabaseName(), tablePath.getObjectName());
+                    path = String.join("/", flinkWarehouseDir, tablePath.getDatabaseName(), tablePath.getObjectName());
                 }
             }
             try {
@@ -298,9 +298,9 @@ public class LakeSoulCatalog implements Catalog {
         }
         if (table instanceof ResolvedCatalogView) {
             tableOptions.put(LAKESOUL_VIEW.key(), "true");
-            tableOptions.put(LAKESOUL_VIEW_TYPE.key(),LAKESOUL_VIEW_TYPE.defaultValue());
-            tableOptions.put(VIEW_ORIGINAL_QUERY,((ResolvedCatalogView) table).getOriginalQuery());
-            tableOptions.put(VIEW_EXPANDED_QUERY,((ResolvedCatalogView) table).getExpandedQuery());
+            tableOptions.put(LAKESOUL_VIEW_TYPE.key(), LAKESOUL_VIEW_TYPE.defaultValue());
+            tableOptions.put(VIEW_ORIGINAL_QUERY, ((ResolvedCatalogView) table).getOriginalQuery());
+            tableOptions.put(VIEW_EXPANDED_QUERY, ((ResolvedCatalogView) table).getExpandedQuery());
         }
         String json = JSON.toJSONString(tableOptions);
         JSONObject properties = JSON.parseObject(json);
@@ -332,13 +332,9 @@ public class LakeSoulCatalog implements Catalog {
         }
         TableInfo tableInfo =
                 dbManager.getTableInfoByNameAndNamespace(tablePath.getObjectName(), tablePath.getDatabaseName());
-        List<PartitionInfo> allPartitionInfo = dbManager.getAllPartitionInfo(tableInfo.getTableId());
-        HashSet<String> partitions = new HashSet<>(100);
-        for (PartitionInfo pif : allPartitionInfo) {
-            partitions.add(pif.getPartitionDesc());
-        }
+        List<String> tableAllPartitionDesc = dbManager.getTableAllPartitionDesc(tableInfo.getTableId());
         ArrayList<CatalogPartitionSpec> al = new ArrayList<>(100);
-        for (String item : partitions) {
+        for (String item : tableAllPartitionDesc) {
             if (null == item || "".equals(item)) {
                 throw new CatalogException("partition not exist");
             } else {
@@ -421,7 +417,22 @@ public class LakeSoulCatalog implements Catalog {
     @Override
     public void dropPartition(ObjectPath tablePath, CatalogPartitionSpec catalogPartitionSpec, boolean ignoreIfExists)
             throws CatalogException {
-        throw new CatalogException("not supported now");
+
+        TableInfo tableInfo =
+                dbManager.getTableInfoByNameAndNamespace(tablePath.getObjectName(), tablePath.getDatabaseName());
+        if (tableInfo == null) {
+            throw new CatalogException(tablePath + " does not exist");
+        }
+        String partitionDesc = DBUtil.formatPartitionDesc(catalogPartitionSpec.getPartitionSpec());
+        List<String> deleteFilePath = dbManager.deleteMetaPartitionInfo(tableInfo.getTableId(), partitionDesc);
+        deleteFilePath.forEach(filePath -> {
+            Path path = new Path(filePath);
+            try {
+                path.getFileSystem().delete(path, true);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
     }
 
     @Override

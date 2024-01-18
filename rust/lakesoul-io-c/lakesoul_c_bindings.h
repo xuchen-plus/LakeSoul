@@ -121,6 +121,8 @@ void next_record_batch(CResult<Reader> *reader,
                        c_ptrdiff_t array_addr,
                        I32ResultCallback callback);
 
+const char *next_record_batch_blocked(CResult<Reader> *reader, c_ptrdiff_t array_addr, int *count);
+
 void next_record_batch_with_data(CResult<Reader> *reader,
                                  c_ptrdiff_t schema_addr,
                                  c_ptrdiff_t array_addr,
@@ -139,6 +141,10 @@ void write_record_batch(CResult<Writer> *writer,
                         c_ptrdiff_t schema_addr,
                         c_ptrdiff_t array_addr,
                         ResultCallback callback);
+
+const char *write_record_batch_blocked(CResult<Writer> *writer,
+                                       c_ptrdiff_t schema_addr,
+                                       c_ptrdiff_t array_addr);
 
 void flush_and_close_writer(CResult<Writer> *writer, ResultCallback callback);
 

@@ -23,7 +23,7 @@ LakeSoul Kafka Stream 主要使用 Spark Structured Streaming 来实现数据同
 
 ## 1. 准备环境
 
-你可以编译 LakeSoul 项目以获取 LakeSoul Kafka Stream jar, 或者可以通过 https://dmetasoul-bucket.obs.cn-southwest-2.myhuaweicloud.com/releases/lakesoul/https://dmetasoul-bucket.obs.cn-southwest-2.myhuaweicloud.com/releases/lakesoul/lakesoul-kafka-stream-3.3.tar.gz 来获取 LakeSoul Kafka Stream 以及其他任务运行依赖的jar包。
+你可以编译 LakeSoul 项目以获取 LakeSoul Kafka Stream jar, 或者可以通过 https://dmetasoul-bucket.obs.cn-southwest-2.myhuaweicloud.com/releases/lakesoul/lakesoul-kafka-stream-3.3.tar.gz 来获取 LakeSoul Kafka Stream 以及其他任务运行依赖的jar包。
 
 下载后解压 tar 包，然后将 jar 包放入 $SPARK_HOME/jars 目录下，或者在提交任务时添加依赖的jar，比如通过 --jars。
 
@@ -78,7 +78,7 @@ export lakesoul_home=./pg.properties && ./bin/spark-submit \
 --driver-memory 4g \
 --executor-memory 4g \
 --master local[4] \
-./jars/lakesoul-spark-2.3.0-spark-3.3.jar \
+./jars/lakesoul-spark-2.5.1-spark-3.3.jar \
 localhost:9092 test.* /tmp/kafka/data /tmp/kafka/checkpoint/ kafka earliest false
 ```
 
@@ -155,6 +155,6 @@ export lakesoul_home=./pg.properties && ./bin/spark-submit \
 --driver-memory 4g \
 --executor-memory 4g \
 --master local[4] \
-./jars/lakesoul-spark-2.3.0-spark-3.3.jar \
+./jars/lakesoul-spark-2.5.1-spark-3.3.jar \
 localhost:9092 test.* /tmp/kafka/data /tmp/kafka/checkpoint/ kafka earliest false http://localhost:8081
 ```
