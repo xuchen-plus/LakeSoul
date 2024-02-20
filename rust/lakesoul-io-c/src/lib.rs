@@ -24,6 +24,13 @@ use tokio::runtime::{Builder, Runtime};
 use lakesoul_io::lakesoul_reader::{LakeSoulReader, RecordBatch, Result, SyncSendableMutableLakeSoulReader};
 use lakesoul_io::lakesoul_writer::SyncSendableMutableLakeSoulWriter;
 
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 #[repr(C)]
 pub struct CResult<OpaqueT> {
     ptr: *mut OpaqueT,

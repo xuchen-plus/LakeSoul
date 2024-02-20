@@ -16,6 +16,13 @@ use prost::bytes::BufMut;
 use prost::Message;
 use proto::proto::entity;
 
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 #[repr(C)]
 pub struct Result<OpaqueT> {
     ptr: *mut OpaqueT,
