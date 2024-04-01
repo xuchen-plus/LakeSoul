@@ -17,19 +17,17 @@
 
 package org.apache.flink.lakesoul.entry;
 
-import com.alibaba.fastjson.JSONObject;
-import com.dmetasoul.lakesoul.meta.DBManager;
+import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.KafkaSourceBuilder;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.lakesoul.sink.LakeSoulMultiTableSinkStreamBuilder;
 import org.apache.flink.lakesoul.tool.LakeSoulSinkOptions;
-import org.apache.flink.lakesoul.types.BinaryKafkaRecordDeserializationSchema;
-import org.apache.flink.lakesoul.types.BinarySourceRecord;
-import org.apache.flink.lakesoul.types.LakeSoulRecordConvert;
+import org.apache.flink.lakesoul.types.*;
 import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSink;
@@ -37,6 +35,7 @@ import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.CheckpointConfig;
 import org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 
 import java.time.LocalDateTime;
@@ -47,7 +46,6 @@ import java.util.concurrent.TimeUnit;
 
 import static org.apache.flink.lakesoul.tool.JobOptions.*;
 import static org.apache.flink.lakesoul.tool.LakeSoulKafkaSinkOptions.*;
-import static org.apache.flink.lakesoul.tool.LakeSoulKafkaSinkOptions.SOURCE_PARALLELISM;
 
 public class KafkaCdc {
 
@@ -76,6 +74,7 @@ public class KafkaCdc {
         int checkpointInterval = parameter.getInt(JOB_CHECKPOINT_INTERVAL.key(), JOB_CHECKPOINT_INTERVAL.defaultValue());
         boolean logicallyDropColumn = parameter.getBoolean(LOGICALLY_DROP_COLUM.key(), true);
         String serverTimezone = parameter.get(SERVER_TIME_ZONE.key(), SERVER_TIME_ZONE.defaultValue());
+        String schemaRegistryUrl = parameter.get(SCHEMA_REGISTRY_URL.key(), SCHEMA_REGISTRY_URL.defaultValue());
 
         //about security
         String securityProtocol = parameter.get(SECURITY_PROTOCOL.key());
@@ -90,6 +89,11 @@ public class KafkaCdc {
         pro.put("bootstrap.servers", kafkaServers);
         pro.put("group.id", topicGroupID);
         pro.put("max.poll.records", maxPollRecords);
+        if (schemaRegistryUrl != null) {
+            pro.put("schema.registry.url", schemaRegistryUrl);
+            pro.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class.getName());
+            pro.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class.getName());
+        }
 
         OffsetsInitializer offSet;
         switch (topicOffset) {
@@ -107,7 +111,6 @@ public class KafkaCdc {
             case "committedOffsets":
             default:
                 offSet = OffsetsInitializer.committedOffsets(OffsetResetStrategy.LATEST);
-
         }
         if (securityProtocol != null) {
             pro.put("security.protocol", securityProtocol);
@@ -140,17 +143,6 @@ public class KafkaCdc {
             }
         }
 
-
-        String[] splitTopicArray = kafkaTopic.split("_");
-        if (splitTopicArray.length < 2) {
-            throw new Exception("topic name is not standardized format: t_{dbName/schemaName}_{tableName} ");
-        }
-        String namespace = splitTopicArray[1];
-        DBManager lakeSoulDBManager = new DBManager();
-        if (lakeSoulDBManager.getNamespaceByNamespace(namespace) == null) {
-            lakeSoulDBManager.createNewNamespace(namespace, new JSONObject().toJSONString(), "");
-        }
-
         Configuration conf = new Configuration();
         // parameters for mutil tables dml sink
         conf.set(LakeSoulSinkOptions.USE_CDC, true);
@@ -162,6 +154,7 @@ public class KafkaCdc {
         conf.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
+        env.getConfig().registerTypeWithKryoSerializer(BinarySourceRecord.class, BinarySourceRecordSerializer.class);
         ParameterTool pt = ParameterTool.fromMap(conf.toMap());
         env.getConfig().setGlobalJobParameters(pt);
         env.enableCheckpointing(checkpointInterval);
@@ -184,12 +177,17 @@ public class KafkaCdc {
 
         LakeSoulRecordConvert lakeSoulRecordConvert = new LakeSoulRecordConvert(conf, serverTimezone);
 
-        KafkaSource<BinarySourceRecord> kafkaSource = KafkaSource.<BinarySourceRecord>builder()
+        KafkaSourceBuilder<BinarySourceRecord> binarySourceRecordKafkaSourceBuilder = KafkaSource.<BinarySourceRecord>builder()
                 .setTopics(kafkaTopic)
                 .setProperties(pro)
-                .setStartingOffsets(offSet)
-                .setDeserializer(new BinaryKafkaRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH)))
-                .build();
+                .setStartingOffsets(offSet);
+        if (schemaRegistryUrl != null) {
+            binarySourceRecordKafkaSourceBuilder.setDeserializer(new BinaryKafkaAvroRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH), schemaRegistryUrl));
+        } else {
+            binarySourceRecordKafkaSourceBuilder.setDeserializer(new BinaryKafkaRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH)));
+        }
+
+        KafkaSource<BinarySourceRecord> kafkaSource = binarySourceRecordKafkaSourceBuilder.build();
 
         LakeSoulMultiTableSinkStreamBuilder.Context context = new LakeSoulMultiTableSinkStreamBuilder.Context();
         context.env = env;

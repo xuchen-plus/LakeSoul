@@ -24,6 +24,7 @@ SPDX-License-Identifier: Apache-2.0
         <scala.version>2.12.10</scala.version>
         <log4j.version>2.17.2</log4j.version>
         <cdc.version>2.4.2</cdc.version>
+        <kafka.avro.version>7.6.0</kafka.avro.version>
         <local.scope>provided</local.scope>
     </properties>
 
@@ -206,6 +207,11 @@ SPDX-License-Identifier: Apache-2.0
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-connector-kafka</artifactId>
             <version>${flink.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.confluent</groupId>
+            <artifactId>kafka-avro-serializer</artifactId>
+            <version>${kafka.avro.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.flink</groupId>

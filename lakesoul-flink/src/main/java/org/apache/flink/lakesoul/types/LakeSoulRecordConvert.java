@@ -57,7 +57,7 @@ import java.util.Map;
 import java.util.Objects;
 
 import static org.apache.flink.formats.common.TimestampFormat.ISO_8601;
-import static org.apache.flink.lakesoul.tool.FlinkUtil.DP_Kafka_DateTimeFormatter;
+import static org.apache.flink.lakesoul.tool.FlinkUtil.DP_DATETIME_FORMATTER_6;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.CDC_CHANGE_COLUMN;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.CDC_CHANGE_COLUMN_DEFAULT;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.SORT_FIELD;
@@ -727,7 +727,7 @@ public class LakeSoulRecordConvert implements Serializable {
 
             JsonToRowDataConverters.JsonToRowDataConverter beforeConverter = this.converter.createConverter(beforeRowType);
             RowData beforeRowData = (RowData) beforeConverter.convert(beforeJsonNode);
-            beforeRowData.setRowKind(RowKind.UPDATE_AFTER);
+            beforeRowData.setRowKind(RowKind.UPDATE_BEFORE);
             JsonToRowDataConverters.JsonToRowDataConverter afterConverter = this.converter.createConverter(afterRowType);
             RowData afterRowData = (RowData) afterConverter.convert(afterJsonNode);
             afterRowData.setRowKind(RowKind.UPDATE_AFTER);
@@ -740,6 +740,60 @@ public class LakeSoulRecordConvert implements Serializable {
                 builder.setOperation("update")
                         .setAfterRowData(afterRowData).setAfterType(afterRowType);
             }
+        }
+        return builder.setTsMs(tsMs).build();
+    }
+
+    public LakeSoulRowDataWrapper kafkaAvroToLakeSoulDataType(JsonNode node, JsonNode nodeSchema, String opType,
+                                                              TableId tableId, List<String> keyList, long tsMs, long sortField) {
+
+        LakeSoulRowDataWrapper.Builder builder = LakeSoulRowDataWrapper.newBuilder().setTableId(tableId);
+        String op = getOPType(opType);
+
+        if (op.equals("insert")) {
+            ((ObjectNode) node).put(SORT_FIELD, sortField);
+            if (useCDC) {
+                ((ObjectNode) node).put(cdcColumn, "insert");
+            }
+            RowType afterRowType = jsonToRowType(nodeSchema, (ObjectNode) node, keyList);
+            JsonToRowDataConverters.JsonToRowDataConverter afterConverter = this.converter.createConverter(afterRowType);
+            RowData afterRowData = (RowData) afterConverter.convert(node);
+            afterRowData.setRowKind(RowKind.INSERT);
+            builder.setOperation("insert").setAfterRowData(afterRowData).setAfterType(afterRowType);
+        } else if (op.equals("delete")) {
+            ((ObjectNode) node).put(SORT_FIELD, sortField);
+            if (useCDC) {
+                ((ObjectNode) node).put(cdcColumn, "delete");
+            }
+            RowType beforeRowType = jsonToRowType(nodeSchema, (ObjectNode) node, keyList);
+            JsonToRowDataConverters.JsonToRowDataConverter beforeConverter = this.converter.createConverter(beforeRowType);
+            RowData beforeRowData = (RowData) beforeConverter.convert(node);
+            beforeRowData.setRowKind(RowKind.DELETE);
+            builder.setOperation("delete").setBeforeRowData(beforeRowData).setBeforeRowType(beforeRowType);
+        } else {
+            ((ObjectNode) node).put(SORT_FIELD, sortField);
+            if (useCDC) {
+                ((ObjectNode) node).put(cdcColumn, "update");
+            }
+            RowType afterRowType = jsonToRowType(nodeSchema, (ObjectNode) node, keyList);
+
+//            JsonToRowDataConverters.JsonToRowDataConverter beforeConverter = this.converter.createConverter(beforeRowType);
+//            RowData beforeRowData = (RowData) beforeConverter.convert(beforeJsonNode);
+//            beforeRowData.setRowKind(RowKind.UPDATE_BEFORE);
+            JsonToRowDataConverters.JsonToRowDataConverter afterConverter = this.converter.createConverter(afterRowType);
+            RowData afterRowData = (RowData) afterConverter.convert(node);
+            afterRowData.setRowKind(RowKind.UPDATE_AFTER);
+            builder.setOperation("update")
+                    .setAfterRowData(afterRowData).setAfterType(afterRowType);
+//            if (partitionFieldsChanged(beforeRowType, beforeRowData, afterRowType, afterRowData)) {
+//                // partition fields changed. we need to emit both before and after RowData
+//                builder.setOperation("update").setBeforeRowData(beforeRowData).setBeforeRowType(beforeRowType)
+//                        .setAfterRowData(afterRowData).setAfterType(afterRowType);
+//            } else {
+//                // otherwise we only need to keep the after RowData
+//                builder.setOperation("update")
+//                        .setAfterRowData(afterRowData).setAfterType(afterRowType);
+//            }
         }
         return builder.setTsMs(tsMs).build();
     }
@@ -809,13 +863,51 @@ public class LakeSoulRecordConvert implements Serializable {
             fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale, nullable, unsigned)));
             if (colType.equals("timestamp") || colType.equals("datetime")) {
                 String value = valueNode.get(colName).asText();
-                ZonedDateTime zonedDateTime = LocalDateTime.parse(value, DP_Kafka_DateTimeFormatter).atZone(serverTimeZone);
+                ZonedDateTime zonedDateTime = LocalDateTime.parse(value, DP_DATETIME_FORMATTER_6).atZone(serverTimeZone);
                 valueNode.put(colName, zonedDateTime.toInstant().toString());
             } else if (colType.endsWith("blob") || colType.endsWith("binary") || colType.equals("bit")) {
                 String value = valueNode.get(colName).asText();
                 valueNode.put(colName, Base64.getDecoder().decode(value));
             }
         }
+        fields.add(new RowType.RowField(SORT_FIELD, new BigIntType(true)));
+        if (useCDC) {
+            fields.add(new RowType.RowField(cdcColumn, new VarCharType(false, Integer.MAX_VALUE)));
+        }
+        return new RowType(true, fields);
+    }
+
+    public RowType jsonToRowType(JsonNode nodeSchema, ObjectNode valueNode, List<String> keyList) {
+        List<RowType.RowField> fields = new ArrayList();
+
+        nodeSchema.forEach( node -> {
+            String colName = node.get("name").asText();
+            if (!colName.equals("op_type") && !colName.equals("op_ts") && !colName.equals("table") && !colName.equals("op_")) {
+                boolean unsigned = false;
+
+                JsonNode typeDefine = node.get("type").get(1);
+                String colType = typeDefine.get("connect.parameters").get("sourceType").asText().toLowerCase(Locale.ROOT);
+                if (colType.contains("unsigned")) {
+                    unsigned = true;
+                    colType = colType.replace("unsigned", "").trim();
+                }
+                int precision = typeDefine.get("connect.parameters").get("length").asInt();
+                int scale = typeDefine.get("connect.parameters").get("scale").asInt();
+                boolean nullable = true;
+                if (keyList.contains(colName)) {
+                    nullable = false;
+                }
+                fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale, nullable, unsigned)));
+                if (colType.equals("timestamp") || colType.equals("datetime")) {
+                    String value = valueNode.get(colName).asText();
+                    ZonedDateTime zonedDateTime = LocalDateTime.parse(value, FlinkUtil.getDpDatetimeFormatter(precision)).atZone(serverTimeZone);
+                    valueNode.put(colName, zonedDateTime.toInstant().toString());
+                } else if (colType.endsWith("blob") || colType.endsWith("binary") || colType.equals("bit")) {
+                    String value = valueNode.get(colName).asText();
+                    valueNode.put(colName, value.getBytes());
+                }
+            }
+        });
         fields.add(new RowType.RowField(SORT_FIELD, new BigIntType(true)));
         if (useCDC) {
             fields.add(new RowType.RowField(cdcColumn, new VarCharType(false, Integer.MAX_VALUE)));

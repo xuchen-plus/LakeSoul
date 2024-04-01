@@ -274,7 +274,12 @@ public class FlinkUtil {
             case "longblob":
                 return new BinaryType(nullable, Integer.MAX_VALUE);
             case "bigint":
-                return new BigIntType(nullable);
+            case "long":
+                if (unsigned) {
+                    return new VarCharType(nullable, Integer.MAX_VALUE);
+                } else {
+                    return new BigIntType(nullable);
+                }
             case "int":
             case "integer":
             case "mediumint":
@@ -289,7 +294,11 @@ public class FlinkUtil {
                     return new FloatType(nullable);
                 }
             case "double":
-                return new DoubleType(nullable);
+                if (unsigned) {
+                    return new VarCharType(nullable, Integer.MAX_VALUE);
+                } else {
+                    return new DoubleType(nullable);
+                }
             case "date":
                 return new DateType(nullable);
             case "datetime":
@@ -641,9 +650,41 @@ public class FlinkUtil {
         return new JSONObject(map);
     }
 
-    public static DateTimeFormatter DP_Kafka_DateTimeFormatter;
+    public static DateTimeFormatter DP_DATETIME_FORMATTER;
+    public static DateTimeFormatter DP_DATETIME_FORMATTER_1;
+    public static DateTimeFormatter DP_DATETIME_FORMATTER_2;
+    public static DateTimeFormatter DP_DATETIME_FORMATTER_3;
+    public static DateTimeFormatter DP_DATETIME_FORMATTER_4;
+    public static DateTimeFormatter DP_DATETIME_FORMATTER_5;
+    public static DateTimeFormatter DP_DATETIME_FORMATTER_6;
     static {
-        DP_Kafka_DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS");
+        DP_DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        DP_DATETIME_FORMATTER_1 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.S");
+        DP_DATETIME_FORMATTER_2 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SS");
+        DP_DATETIME_FORMATTER_3 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+        DP_DATETIME_FORMATTER_4 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSS");
+        DP_DATETIME_FORMATTER_5 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSS");
+        DP_DATETIME_FORMATTER_6 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS");
+
+    }
+
+    public static DateTimeFormatter getDpDatetimeFormatter(int index) {
+        switch (index) {
+            case 1:
+                return DP_DATETIME_FORMATTER_1;
+            case 2:
+                return DP_DATETIME_FORMATTER_2;
+            case 3:
+                return DP_DATETIME_FORMATTER_3;
+            case 4:
+                return DP_DATETIME_FORMATTER_4;
+            case 5:
+                return DP_DATETIME_FORMATTER_5;
+            case 6:
+                return DP_DATETIME_FORMATTER_6;
+            default:
+                return DP_DATETIME_FORMATTER;
+        }
     }
 
     public static boolean hasHdfsClasses() {

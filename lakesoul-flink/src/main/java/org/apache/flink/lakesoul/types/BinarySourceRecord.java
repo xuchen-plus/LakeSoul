@@ -10,6 +10,7 @@ import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.SchemaA
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Struct;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.source.SourceRecord;
 import io.debezium.data.Envelope;
+import org.apache.avro.generic.GenericRecord;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.lakesoul.tool.FlinkUtil;
@@ -163,6 +164,60 @@ public class BinarySourceRecord {
         long sortField = offset;
 
         LakeSoulRowDataWrapper data = convert.kafkaToLakeSoulDataType(before, beforeTypeStr, after, afterTypeStr, opType, tableId, keyList, tsMs, sortField);
+        String tablePath = new Path(new Path(basePath, tableId.schema()), tableId.table()).toString();
+
+        return new BinarySourceRecord(tableId.toString(), keyList, tableId, FlinkUtil.makeQualifiedPath(tablePath).toString(),
+                Collections.emptyList(), false, data, null);
+    }
+
+    public static BinarySourceRecord fromKafkaAvroSourceRecord(ConsumerRecord consumerRecord,
+                                                           GenericRecord keyRecord,
+                                                           GenericRecord valueRecord,
+                                                           LakeSoulRecordConvert convert,
+                                                           String basePath,
+                                                           ObjectMapper objectMapper) throws Exception {
+
+
+        long offset = consumerRecord.offset();
+        org.apache.avro.Schema valueSchema = valueRecord.getSchema();
+
+        JsonNode keyNode = objectMapper.readTree(keyRecord.toString());
+        JsonNode valueSchemaNode = objectMapper.readTree(valueSchema.toString()).get("fields");
+        JsonNode valueNode = objectMapper.readTree(valueRecord.toString());
+
+        List<String> keyList = new ArrayList<>();
+        Iterator<String> pkIterator = keyNode.fieldNames();
+        while (pkIterator.hasNext()) {
+            String keyName = pkIterator.next();
+            keyList.add(keyName);
+        }
+
+        String opType = valueNode.get("op_type").asText();
+        ((ObjectNode) valueNode).remove("op_type");
+        long tsMs = valueNode.get("op_ts").asLong();
+        ((ObjectNode) valueNode).remove("op_ts");
+
+        String databaseAndTable = valueNode.get("table").asText();
+        String databaseName = "";
+        String tableName = "";
+        String[] split = databaseAndTable.split("\\.");
+        if (split.length != 2) {
+            throw new IllegalArgumentException(
+                    String.format("This record database and table info ERROR, attribute 'table' should be the format of 'database.table'," +
+                            "current is 'table': %s", databaseAndTable));
+        } else {
+            databaseName = split[0];
+            tableName = split[1];
+            if (StringUtils.isBlank(databaseName) || StringUtils.isBlank(tableName)) {
+                throw new IllegalArgumentException(String.format("This record database and table info be lost, 'table': %s", databaseAndTable));
+            }
+            ((ObjectNode) valueNode).remove("table");
+        }
+        TableId tableId = new TableId("lakesoul", databaseName, tableName);
+
+        long sortField = offset;
+
+        LakeSoulRowDataWrapper data = convert.kafkaAvroToLakeSoulDataType(valueNode, valueSchemaNode, opType, tableId, keyList, tsMs, sortField);
         String tablePath = new Path(new Path(basePath, tableId.schema()), tableId.table()).toString();
 
         return new BinarySourceRecord(tableId.toString(), keyList, tableId, FlinkUtil.makeQualifiedPath(tablePath).toString(),

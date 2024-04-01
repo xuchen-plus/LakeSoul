@@ -100,4 +100,11 @@ public class LakeSoulKafkaSinkOptions extends LakeSoulSinkOptions{
             .noDefaultValue()
             .withDescription("Configure the passwd of keystore (private key) if client authentication is required");
 
+
+    public static final ConfigOption<String> SCHEMA_REGISTRY_URL = ConfigOptions
+            .key("schema_registry_url")
+            .stringType()
+            .noDefaultValue()
+            .withDescription("Configure the schema registry url if the kafka service is required");
+
 }
