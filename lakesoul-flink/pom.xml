@@ -27,7 +27,28 @@ SPDX-License-Identifier: Apache-2.0
         <cdc.version>2.4.2</cdc.version>
         <kafka.avro.version>7.6.0</kafka.avro.version>
         <local.scope>provided</local.scope>
+        <schema.registry.version>7.6.0</schema.registry.version>
     </properties>
+
+    <repositories>
+        <repository>
+            <id>central</id>
+            <name>Maven Central</name>
+            <layout>default</layout>
+            <url>https://repo1.maven.org/maven2</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+        <repository>
+            <id>confluent</id>
+            <name>Confluent</name>
+            <url>https://packages.confluent.io/maven/</url>
+        </repository>
+    </repositories>
 
     <dependencies>
         <dependency>
@@ -213,6 +234,43 @@ SPDX-License-Identifier: Apache-2.0
             <groupId>io.confluent</groupId>
             <artifactId>kafka-avro-serializer</artifactId>
             <version>${kafka.avro.version}</version>
+            <exclusions>
+                <exclusion>
+                    <artifactId>jackson-core</artifactId>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>jackson-annotations</artifactId>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>jackson-databind</artifactId>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>io.confluent</groupId>
+            <artifactId>kafka-schema-registry-client</artifactId>
+            <version>${schema.registry.version}</version>
+            <exclusions>
+                <exclusion>
+                    <artifactId>kafka-clients</artifactId>
+                    <groupId>org.apache.kafka</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>jackson-annotations</artifactId>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>jackson-core</artifactId>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>jackson-databind</artifactId>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.apache.flink</groupId>
