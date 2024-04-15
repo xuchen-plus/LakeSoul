@@ -382,20 +382,29 @@ pub async fn prune_filter_and_execute(
     batch_size: usize,
 ) -> Result<SendableRecordBatchStream> {
     let df_schema = df.schema().clone();
-    // find columns requested and prune others
-    let cols = schema_intersection(Arc::new(df_schema.clone()), request_schema.clone(), &[]);
-    if cols.is_empty() {
-        Ok(Box::pin(EmptySchemaStream::new(batch_size, df.count().await?)))
-    } else {
-        // row filtering should go first since filter column may not in the selected cols
+    if request_schema.fields().is_empty() {
         let arrow_schema = Arc::new(Schema::from(df_schema));
         let df = filter_str.iter().try_fold(df, |df, f| {
             let filter = FilterParser::parse(f.clone(), arrow_schema.clone());
             df.filter(filter)
         })?;
-        // column pruning
-        let df = df.select(cols)?;
         df.execute_stream().await
+    } else {    
+        // find columns requested and prune others
+        let cols = schema_intersection(Arc::new(df_schema.clone()), request_schema.clone(), &[]);
+        if cols.is_empty() {
+            Ok(Box::pin(EmptySchemaStream::new(batch_size, df.count().await?)))
+        } else {
+            // row filtering should go first since filter column may not in the selected cols
+            let arrow_schema = Arc::new(Schema::from(df_schema));
+            let df = filter_str.iter().try_fold(df, |df, f| {
+                let filter = FilterParser::parse(f.clone(), arrow_schema.clone());
+                df.filter(filter)
+            })?;
+            // column pruning
+            let df = df.select(cols)?;
+            df.execute_stream().await
+        }
     }
 }
 
