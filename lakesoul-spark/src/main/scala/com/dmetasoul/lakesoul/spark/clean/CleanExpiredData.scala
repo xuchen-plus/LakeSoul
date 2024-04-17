@@ -17,10 +17,14 @@ object CleanExpiredData {
 
   private val conn = DBConnector.getConn
   var serverTimeZone = TimeZone.getDefault.getID
+  private var defaultPartitionTTL: Int = -1
+  private var defaultCompactionTTL: Int = -1
 
   def main(args: Array[String]): Unit = {
     val parameter = ParametersTool.fromArgs(args)
     serverTimeZone = parameter.get("server.time.zone", serverTimeZone)
+    defaultPartitionTTL = parameter.getInt("data.save.time", defaultPartitionTTL)
+    defaultCompactionTTL = parameter.getInt("redundant.data.save.time", defaultCompactionTTL)
 
     val spark: SparkSession = SparkSession.builder
       .getOrCreate()
@@ -47,12 +51,22 @@ object CleanExpiredData {
     partitionRows.foreach(p => {
       val tableId = p.get(0).toString
       val partitionDesc = p.get(1).toString
-      val latestCompactionTimestamp = getLatestCompactionTimestamp(tableId, partitionDesc, p.get(3), spark)
+      var tablePartitionTTL = p.get(2)
+      var tableCompactionTTL = p.get(3)
+
+      if (tablePartitionTTL == null && defaultPartitionTTL != -1) {
+        tablePartitionTTL = defaultPartitionTTL
+      }
+      if (tableCompactionTTL == null && defaultCompactionTTL != -1) {
+        tableCompactionTTL = defaultCompactionTTL
+      }
+
+      val latestCompactionTimestamp = getLatestCompactionTimestamp(tableId, partitionDesc, tableCompactionTTL, spark)
       val latestCommitTimestamp = getLatestCommitTimestamp(tableId, partitionDesc, spark)
       //no compaction action
       if (latestCompactionTimestamp == 0L) {
-        if (p.get(2) != null) {
-          val partitionTtlMils = getExpiredDateZeroTimeStamp(p.get(2).toString.toInt)
+        if (tablePartitionTTL != null) {
+          val partitionTtlMils = getExpiredDateZeroTimeStamp(tablePartitionTTL.toString.toInt)
           if (partitionTtlMils > latestCommitTimestamp) {
             cleanSinglePartitionExpiredDiskData(tableId, partitionDesc, partitionTtlMils, spark)
             cleanSingleDataCommitInfo(tableId, partitionDesc, partitionTtlMils)
@@ -60,25 +74,25 @@ object CleanExpiredData {
           }
         }
       }
-      else if (p.get(2) == null && p.get(3) != null) {
-        val compactionTtlMils = getExpiredDateZeroTimeStamp(p.get(3).toString.toInt)
+      else if (tablePartitionTTL == null && tableCompactionTTL != null) {
+        val compactionTtlMils = getExpiredDateZeroTimeStamp(tableCompactionTTL.toString.toInt)
         if (compactionTtlMils > latestCompactionTimestamp) {
           cleanSinglePartitionExpiredDiskData(tableId, partitionDesc, latestCompactionTimestamp, spark)
           cleanSingleDataCommitInfo(tableId, partitionDesc, latestCompactionTimestamp)
           cleanSinglePartitionInfo(tableId, partitionDesc, latestCompactionTimestamp)
         }
       }
-      else if (p.get(2) != null && p.get(3) == null) {
-        val partitionTtlMils = getExpiredDateZeroTimeStamp(p.get(2).toString.toInt)
+      else if (tablePartitionTTL != null && tableCompactionTTL == null) {
+        val partitionTtlMils = getExpiredDateZeroTimeStamp(tablePartitionTTL.toString.toInt)
         if (partitionTtlMils > latestCommitTimestamp) {
           cleanSinglePartitionExpiredDiskData(tableId, partitionDesc, partitionTtlMils, spark)
           cleanSingleDataCommitInfo(tableId, partitionDesc, partitionTtlMils)
           cleanSinglePartitionInfo(tableId, partitionDesc, partitionTtlMils)
         }
       }
-      else if (p.get(2) != null && p.get(3) != null) {
-        val compactionTtlMils = getExpiredDateZeroTimeStamp(p.get(3).toString.toInt)
-        val partitionTtlMils = getExpiredDateZeroTimeStamp(p.get(2).toString.toInt)
+      else if (tablePartitionTTL != null && tableCompactionTTL != null) {
+        val compactionTtlMils = getExpiredDateZeroTimeStamp(tableCompactionTTL.toString.toInt)
+        val partitionTtlMils = getExpiredDateZeroTimeStamp(tablePartitionTTL.toString.toInt)
         if (partitionTtlMils > latestCommitTimestamp) {
           cleanSinglePartitionExpiredDiskData(tableId, partitionDesc, partitionTtlMils, spark)
           cleanSingleDataCommitInfo(tableId, partitionDesc, partitionTtlMils)
