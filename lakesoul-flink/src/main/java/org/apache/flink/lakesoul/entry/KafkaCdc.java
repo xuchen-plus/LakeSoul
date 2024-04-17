@@ -43,6 +43,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 import static org.apache.flink.lakesoul.tool.JobOptions.*;
 import static org.apache.flink.lakesoul.tool.LakeSoulKafkaSinkOptions.*;
@@ -75,6 +76,8 @@ public class KafkaCdc {
         boolean logicallyDropColumn = parameter.getBoolean(LOGICALLY_DROP_COLUM.key(), true);
         String serverTimezone = parameter.get(SERVER_TIME_ZONE.key(), SERVER_TIME_ZONE.defaultValue());
         String schemaRegistryUrl = parameter.get(SCHEMA_REGISTRY_URL.key(), SCHEMA_REGISTRY_URL.defaultValue());
+        boolean regularTopicName = parameter.getBoolean(REGULAR_TOPIC_NAME.key(), REGULAR_TOPIC_NAME.defaultValue());
+        boolean kafkaDataAvroType = parameter.getBoolean(KAFKA_DATA_AVRO_TYPE.key(), KAFKA_DATA_AVRO_TYPE.defaultValue());
 
         //about security
         String securityProtocol = parameter.get(SECURITY_PROTOCOL.key());
@@ -89,7 +92,7 @@ public class KafkaCdc {
         pro.put("bootstrap.servers", kafkaServers);
         pro.put("group.id", topicGroupID);
         pro.put("max.poll.records", maxPollRecords);
-        if (schemaRegistryUrl != null) {
+        if (kafkaDataAvroType) {
             pro.put("schema.registry.url", schemaRegistryUrl);
             pro.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class.getName());
             pro.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class.getName());
@@ -178,9 +181,14 @@ public class KafkaCdc {
         LakeSoulRecordConvert lakeSoulRecordConvert = new LakeSoulRecordConvert(conf, serverTimezone);
 
         KafkaSourceBuilder<BinarySourceRecord> binarySourceRecordKafkaSourceBuilder = KafkaSource.<BinarySourceRecord>builder()
-                .setTopics(kafkaTopic)
                 .setProperties(pro)
                 .setStartingOffsets(offSet);
+        if (regularTopicName) {
+            Pattern topicPattern = Pattern.compile(kafkaTopic);
+            binarySourceRecordKafkaSourceBuilder.setTopicPattern(topicPattern);
+        } else {
+            binarySourceRecordKafkaSourceBuilder.setTopics(kafkaTopic);
+        }
         if (schemaRegistryUrl != null) {
             binarySourceRecordKafkaSourceBuilder.setDeserializer(new BinaryKafkaAvroRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH), schemaRegistryUrl));
         } else {

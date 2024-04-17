@@ -107,4 +107,18 @@ public class LakeSoulKafkaSinkOptions extends LakeSoulSinkOptions{
             .noDefaultValue()
             .withDescription("Configure the schema registry url if the kafka service is required");
 
+    public static final ConfigOption<Boolean> KAFKA_DATA_AVRO_TYPE = ConfigOptions
+            .key("kafka_data_avro_type")
+            .booleanType()
+            .defaultValue(true)
+            .withDescription("Kafka Data Type is Avro");
+
+    public static final ConfigOption<Boolean> REGULAR_TOPIC_NAME = ConfigOptions
+            .key("regular_topic_name")
+            .booleanType()
+            .defaultValue(true)
+            .withDescription("Kafka Topic Name is Regular Expression");
+
+
+
 }
