@@ -33,6 +33,7 @@ import java.util.*;
 
 import static com.dmetasoul.lakesoul.meta.DBConfig.LAKESOUL_HASH_PARTITION_SPLITTER;
 import static org.apache.flink.lakesoul.metadata.LakeSoulCatalog.TABLE_ID_PREFIX;
+import static org.apache.flink.lakesoul.tool.LakeSoulDDLSinkOptions.SOURCE_DB_TYPE;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.*;
 
 /**
@@ -51,6 +52,7 @@ public class LakeSoulSinkGlobalCommitter
     private final LakeSoulSinkCommitter committer;
     private final DBManager dbManager;
     private final Configuration conf;
+    private final boolean isBounded;
 
     private final boolean logicallyDropColumn;
 
@@ -58,6 +60,7 @@ public class LakeSoulSinkGlobalCommitter
         committer = LakeSoulSinkCommitter.INSTANCE;
         dbManager = new DBManager();
         this.conf = conf;
+        isBounded = conf.get(IS_BOUNDED).equals("true");
         logicallyDropColumn = conf.getBoolean(LOGICALLY_DROP_COLUM);
     }
 
@@ -93,7 +96,7 @@ public class LakeSoulSinkGlobalCommitter
     @Override
     public LakeSoulMultiTableSinkGlobalCommittable combine(List<LakeSoulMultiTableSinkCommittable> committables)
             throws IOException {
-        return LakeSoulMultiTableSinkGlobalCommittable.fromLakeSoulMultiTableSinkCommittable(committables);
+        return LakeSoulMultiTableSinkGlobalCommittable.fromLakeSoulMultiTableSinkCommittable(committables, isBounded);
     }
 
     /**
@@ -108,10 +111,11 @@ public class LakeSoulSinkGlobalCommitter
     public List<LakeSoulMultiTableSinkGlobalCommittable> commit(
             List<LakeSoulMultiTableSinkGlobalCommittable> globalCommittables) throws IOException, InterruptedException {
         LakeSoulMultiTableSinkGlobalCommittable globalCommittable =
-                LakeSoulMultiTableSinkGlobalCommittable.fromLakeSoulMultiTableSinkGlobalCommittable(globalCommittables);
+                LakeSoulMultiTableSinkGlobalCommittable.fromLakeSoulMultiTableSinkGlobalCommittable(globalCommittables, isBounded);
         LOG.info("Committing: {}", globalCommittable);
 
         int index = 0;
+        String dbType = this.conf.getString(SOURCE_DB_TYPE, "");
         for (Map.Entry<Tuple2<TableSchemaIdentity, String>, List<LakeSoulMultiTableSinkCommittable>> entry :
                 globalCommittable.getGroupedCommitables()
                         .entrySet()) {
@@ -119,6 +123,9 @@ public class LakeSoulSinkGlobalCommitter
             List<LakeSoulMultiTableSinkCommittable> lakeSoulMultiTableSinkCommittable = entry.getValue();
             String tableName = identity.tableId.table();
             String tableNamespace = identity.tableId.schema();
+            if (tableNamespace == null) {
+                tableNamespace = identity.tableId.catalog();
+            }
             boolean isCdc = identity.useCDC;
             Schema msgSchema = FlinkUtil.toArrowSchema(identity.rowType, isCdc ? Optional.of(
                     identity.cdcColumn) :

@@ -481,7 +481,7 @@ public class DBManager {
                             readPartitionVersion + 1, curVersion);
                     if (commitOp.equals(CommitOp.UpdateCommit)) {
                         // TODO: 2024/3/22 further considering for this UpdateCommit conflict case
-                        if (
+                        if (middleCommitOps.contains(CommitOp.UpdateCommit) ||
                                 (middleCommitOps.size() > 1 && middleCommitOps.contains(CommitOp.CompactionCommit))) {
                             throw new IllegalStateException(
                                     "current operation conflicts with other data writing tasks, table path: " +

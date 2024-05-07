@@ -13,6 +13,7 @@ import org.apache.flink.util.Preconditions;
 
 import javax.annotation.Nullable;
 import java.io.Serializable;
+import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 
@@ -139,7 +140,7 @@ public class LakeSoulMultiTableSinkCommittable implements Serializable, Comparab
     public void merge(LakeSoulMultiTableSinkCommittable committable) {
         Preconditions.checkState(identity.equals(committable.getIdentity()));
         Preconditions.checkState(bucketId.equals(committable.getBucketId()));
-        Preconditions.checkState(creationTime == committable.getCreationTime());
+//        Preconditions.checkState(creationTime == committable.getCreationTime());
         if (hasPendingFile()) {
             if (committable.hasPendingFile()) pendingFiles.addAll(committable.getPendingFiles());
         } else {
@@ -152,13 +153,14 @@ public class LakeSoulMultiTableSinkCommittable implements Serializable, Comparab
         if (sourcePartitionInfo == null) {
             sourcePartitionInfo = committable.getSourcePartitionInfo();
         } else {
+            if (committable.getSourcePartitionInfo() == null || committable.getSourcePartitionInfo().isEmpty()) return;
             try {
                 JniWrapper jniWrapper = JniWrapper
-                        .parseFrom(sourcePartitionInfo.getBytes())
+                        .parseFrom(Base64.getDecoder().decode(committable.getSourcePartitionInfo()))
                         .toBuilder()
                         .addAllPartitionInfo(
                                 JniWrapper
-                                        .parseFrom(committable.getSourcePartitionInfo().getBytes())
+                                        .parseFrom(Base64.getDecoder().decode(committable.getSourcePartitionInfo()))
                                         .getPartitionInfoList()
                         )
                         .build();
