@@ -88,6 +88,9 @@ public class NativeMetadataJavaClient implements AutoCloseable {
         return instance;
     }
 
+    public static void shutDownInstance() {
+        instance = null;
+    }
 
     public Pointer getTokioPostgresClient() {
         return tokioPostgresClient;
@@ -281,6 +284,7 @@ public class NativeMetadataJavaClient implements AutoCloseable {
 
                 } catch (InvalidProtocolBufferException | InterruptedException | ExecutionException e) {
                     if (retryCounter == 0) {
+                        shutDownInstance();
                         throw new RuntimeException(e);
                     } else {
                         enlargeTimeout();
@@ -362,6 +366,7 @@ public class NativeMetadataJavaClient implements AutoCloseable {
                     return future.get(timeout, TimeUnit.MILLISECONDS);
                 } catch (InterruptedException | ExecutionException e) {
                     if (retryCounter == 0) {
+                        shutDownInstance();
                         throw new RuntimeException(e);
                     } else {
                         enlargeTimeout();
@@ -408,6 +413,7 @@ public class NativeMetadataJavaClient implements AutoCloseable {
                     return future.get(timeout, TimeUnit.MILLISECONDS);
                 } catch (InterruptedException | ExecutionException e) {
                     if (retryCounter == 0) {
+                        shutDownInstance();
                         throw new RuntimeException(e);
                     } else {
                         enlargeTimeout();
@@ -456,6 +462,7 @@ public class NativeMetadataJavaClient implements AutoCloseable {
                     return Arrays.stream(result.split(PARAM_DELIM)).collect(Collectors.toList());
                 } catch (InterruptedException | ExecutionException e) {
                     if (retryCounter == 0) {
+                        shutDownInstance();
                         throw new RuntimeException(e);
                     } else {
                         enlargeTimeout();
