@@ -115,6 +115,12 @@ public class LakeSoulSinkCommitter implements Committer<LakeSoulMultiTableSinkCo
                     dataCommitInfo.setCommitOp(CommitOp.UpdateCommit);
                 } else if (LakeSoulSinkOptions.PARTITION_DELETE.equals(committable.getDmlType())) {
                     dataCommitInfo.setCommitOp(CommitOp.DeleteCommit);
+                } else if (LakeSoulSinkOptions.UPDATE.equals(committable.getDmlType())) {
+                    if (!identity.primaryKeys.isEmpty()) {
+                        dataCommitInfo.setCommitOp(CommitOp.AppendCommit);
+                    } else {
+                        dataCommitInfo.setCommitOp(CommitOp.UpdateCommit);
+                    }
                 } else {
                     dataCommitInfo.setCommitOp(CommitOp.AppendCommit);
                 }
