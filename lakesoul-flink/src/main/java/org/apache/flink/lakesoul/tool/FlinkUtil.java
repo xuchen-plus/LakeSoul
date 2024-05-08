@@ -649,7 +649,6 @@ public class FlinkUtil {
             if (!hdfs.exists(tbDir)) {
                 hdfs.mkdirs(tbDir);
             }
-            hdfs.mkdirs(tbDir);
             hdfs.setOwner(tbDir, userName, domain);
             hdfs.setPermission(tbDir, new FsPermission(FsAction.ALL, FsAction.READ_EXECUTE, FsAction.NONE));
         }

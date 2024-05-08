@@ -164,7 +164,7 @@ public class LakeSoulMultiTableSinkCommittable implements Serializable, Comparab
                                         .getPartitionInfoList()
                         )
                         .build();
-                sourcePartitionInfo = new String(jniWrapper.toByteArray());
+                sourcePartitionInfo = Base64.getEncoder().encodeToString(jniWrapper.toByteArray());
             } catch (InvalidProtocolBufferException e) {
                 throw new RuntimeException(e);
             }
