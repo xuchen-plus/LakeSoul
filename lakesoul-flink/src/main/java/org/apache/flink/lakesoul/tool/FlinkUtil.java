@@ -15,6 +15,7 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
+import org.apache.flink.core.fs.SafetyNetWrapperFileSystem;
 import org.apache.flink.runtime.fs.hdfs.HadoopFileSystem;
 import org.apache.flink.runtime.util.HadoopUtils;
 import org.apache.flink.table.api.*;
@@ -604,6 +605,7 @@ public class FlinkUtil {
             FlinkUtil.class.getClassLoader().loadClass("org.apache.hadoop.hdfs.DistributedFileSystem");
             return true;
         } catch (ClassNotFoundException e) {
+            LOG.info("HDFS classes not in classpath, ignore dir permission setting");
             return false;
         }
     }
@@ -624,22 +626,28 @@ public class FlinkUtil {
         if (!hasHdfsClasses()) return;
 
         FileSystem fs = p.getFileSystem();
-        if (fs instanceof HadoopFileSystem) {
+        if ((fs instanceof HadoopFileSystem)
+                || (fs instanceof SafetyNetWrapperFileSystem
+                && ((SafetyNetWrapperFileSystem) fs).getWrappedDelegate() instanceof HadoopFileSystem)) {
             String userName = DBUtil.getUser();
             String domain = DBUtil.getDomain();
-            if (userName == null || domain.equals("public")) return;
-
-            HadoopFileSystem hfs = (HadoopFileSystem) fs;
+            HadoopFileSystem hfs = fs instanceof HadoopFileSystem ? (HadoopFileSystem) fs
+                    : (HadoopFileSystem) ((SafetyNetWrapperFileSystem) fs).getWrappedDelegate();
             org.apache.hadoop.fs.FileSystem hdfs = hfs.getHadoopFileSystem();
+            LOG.info("Set dir {} permission for {}:{} with flink fs {}, hadoop fs {}", p, userName, domain,
+                    hfs.getClass(), hdfs.getClass());
+
+            if (userName == null || domain == null || domain.contains("public")) return;
+
             org.apache.hadoop.fs.Path nsDir = HadoopFileSystem.toHadoopPath(p.getParent());
             if (!hdfs.exists(nsDir)) {
                 hdfs.mkdirs(nsDir);
-                hdfs.setOwner(nsDir, userName, domain);
-                hdfs.setPermission(nsDir, new FsPermission(FsAction.ALL, FsAction.ALL, FsAction.NONE));
             }
+            hdfs.setOwner(nsDir, userName, domain);
+            hdfs.setPermission(nsDir, new FsPermission(FsAction.ALL, FsAction.ALL, FsAction.NONE));
             org.apache.hadoop.fs.Path tbDir = HadoopFileSystem.toHadoopPath(p);
-            if (hdfs.exists(tbDir)) {
-                throw new IOException("Table directory already exists: " + tbDir);
+            if (!hdfs.exists(tbDir)) {
+                hdfs.mkdirs(tbDir);
             }
             hdfs.mkdirs(tbDir);
             hdfs.setOwner(tbDir, userName, domain);

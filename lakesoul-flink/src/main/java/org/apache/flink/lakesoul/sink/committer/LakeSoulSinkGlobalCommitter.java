@@ -15,6 +15,7 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.flink.api.connector.sink.GlobalCommitter;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.lakesoul.sink.LakeSoulMultiTablesSink;
 import org.apache.flink.lakesoul.sink.state.LakeSoulMultiTableSinkCommittable;
@@ -153,8 +154,9 @@ public class LakeSoulSinkGlobalCommitter
                         properties.put(CDC_CHANGE_COLUMN, CDC_CHANGE_COLUMN_DEFAULT);
                     }
                 }
-                Path tablePath = new Path(identity.tableLocation);
-                FlinkUtil.createAndSetTableDirPermission(tablePath);
+                FileSystem fileSystem = new Path(identity.tableLocation).getFileSystem();
+                Path qp = new Path(identity.tableLocation).makeQualified(fileSystem);
+                FlinkUtil.createAndSetTableDirPermission(qp);
                 dbManager.createNewTable(tableId, tableNamespace, tableName, identity.tableLocation, msgSchema.toJson(),
                         properties, partition);
             } else {
