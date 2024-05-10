@@ -26,6 +26,8 @@ import org.apache.flink.table.catalog.stats.CatalogTableStatistics;
 import org.apache.flink.table.expressions.CallExpression;
 import org.apache.flink.table.expressions.Expression;
 import org.apache.flink.table.factories.Factory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.*;
@@ -36,6 +38,8 @@ import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.*;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
 public class LakeSoulCatalog implements Catalog {
+
+    private static final Logger LOG = LoggerFactory.getLogger(LakeSoulCatalog.class);
 
     public static final String CATALOG_NAME = "lakesoul";
     public static final String TABLE_ID_PREFIX = "table_";
@@ -295,6 +299,8 @@ public class LakeSoulCatalog implements Catalog {
                 qualifiedPath = qp.toString();
             } catch (IOException e) {
                 e.printStackTrace();
+                LOG.error("Set table dir {} permission failed.", path, e);
+                throw new CatalogException("Set table dir " + path + " permission failed.", e);
             }
         }
         if (table instanceof ResolvedCatalogView) {
