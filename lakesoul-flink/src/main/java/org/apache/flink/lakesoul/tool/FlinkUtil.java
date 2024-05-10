@@ -261,6 +261,7 @@ public class FlinkUtil {
     public static CatalogBaseTable toFlinkCatalog(TableInfo tableInfo) {
         String tableSchema = tableInfo.getTableSchema();
         JSONObject properties = JSON.parseObject(tableInfo.getProperties());
+        properties.put(CATALOG_PATH.key(), tableInfo.getTablePath());
 
         org.apache.arrow.vector.types.pojo.Schema arrowSchema = null;
         if (TableInfoDao.isArrowKindSchema(tableSchema)) {
