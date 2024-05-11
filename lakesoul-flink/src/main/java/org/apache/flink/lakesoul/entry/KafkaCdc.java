@@ -41,6 +41,7 @@ import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
@@ -187,7 +188,7 @@ public class KafkaCdc {
             Pattern topicPattern = Pattern.compile(kafkaTopic);
             binarySourceRecordKafkaSourceBuilder.setTopicPattern(topicPattern);
         } else {
-            binarySourceRecordKafkaSourceBuilder.setTopics(kafkaTopic);
+            binarySourceRecordKafkaSourceBuilder.setTopics(Arrays.asList(kafkaTopic.split(",")));
         }
         if (schemaRegistryUrl != null) {
             binarySourceRecordKafkaSourceBuilder.setDeserializer(new BinaryKafkaAvroRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH), schemaRegistryUrl));
