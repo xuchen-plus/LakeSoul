@@ -18,6 +18,7 @@
 package org.apache.flink.lakesoul.entry;
 
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.api.java.utils.ParameterTool;
@@ -93,7 +94,11 @@ public class KafkaCdc {
         pro.put("bootstrap.servers", kafkaServers);
         pro.put("group.id", topicGroupID);
         pro.put("max.poll.records", maxPollRecords);
+        pro.put("retries", 3);
         if (kafkaDataAvroType) {
+            if (StringUtils.isEmpty(schemaRegistryUrl.trim())) {
+                throw new IllegalArgumentException("Kafka Data Type is Avro, Schema Registry Url must be Required");
+            }
             pro.put("schema.registry.url", schemaRegistryUrl);
             pro.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class.getName());
             pro.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class.getName());
@@ -190,7 +195,7 @@ public class KafkaCdc {
         } else {
             binarySourceRecordKafkaSourceBuilder.setTopics(Arrays.asList(kafkaTopic.split(",")));
         }
-        if (schemaRegistryUrl != null) {
+        if (kafkaDataAvroType) {
             binarySourceRecordKafkaSourceBuilder.setDeserializer(new BinaryKafkaAvroRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH), schemaRegistryUrl));
         } else {
             binarySourceRecordKafkaSourceBuilder.setDeserializer(new BinaryKafkaRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH)));
