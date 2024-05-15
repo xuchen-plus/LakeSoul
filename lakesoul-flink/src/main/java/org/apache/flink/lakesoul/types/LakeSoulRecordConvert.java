@@ -844,18 +844,44 @@ public class LakeSoulRecordConvert implements Serializable {
                 unsigned = true;
                 fieldStr = fieldStr.replace("UNSIGNED ", "").replace("unsigned ", "");
             }
-            String[] colDefine = fieldStr.split(" ");
-            String nameAndType = colDefine[0];
+
+            int precision = 0;
+            int scale = 0;
+            boolean hasPrecision = false;
+            boolean hasScale = false;
+            String nameAndType = fieldStr;
+            int precisionIndex = fieldStr.indexOf("precision");
+            if (precisionIndex > 0 ) {
+                nameAndType = fieldStr.substring(0, precisionIndex).trim();
+                fieldStr = fieldStr.substring(precisionIndex, fieldStr.length());
+                hasPrecision = true;
+            }
+            int scaleIndex = fieldStr.indexOf("scale");
+            String precisionInfo = fieldStr;
+            if (scaleIndex > 0) {
+                precisionInfo = fieldStr.substring(0, scaleIndex).trim();
+                fieldStr = fieldStr.substring(scaleIndex, fieldStr.length());
+                hasScale = true;
+            }
+            String scaleInfo = fieldStr;
+            if (hasPrecision) {
+                precision = Integer.parseInt(precisionInfo.split(":")[1]);
+            }
+            if (hasScale) {
+                scale = Integer.parseInt(scaleInfo.split(":")[1]);
+            }
             String colName = nameAndType.split(":")[0];
             String colType = nameAndType.split(":")[1].toLowerCase(Locale.ROOT).trim();
-            int precision = 0;
-            if (colDefine.length > 1) {
-                precision = Integer.parseInt(colDefine[1].split(":")[1]);
-            }
-            int scale = 0;
-            if (colDefine.length > 2) {
-                scale = Integer.parseInt(colDefine[2].split(":")[1]);
-            }
+//            String[] colDefine = fieldStr.split(" ");
+//            String nameAndType = colDefine[0];
+//            int precision = 0;
+//            if (colDefine.length > 1) {
+//                precision = Integer.parseInt(colDefine[1].split(":")[1]);
+//            }
+//            int scale = 0;
+//            if (colDefine.length > 2) {
+//                scale = Integer.parseInt(colDefine[2].split(":")[1]);
+//            }
             boolean nullable = true;
             if (keyList.contains(colName)) {
                 nullable = false;
