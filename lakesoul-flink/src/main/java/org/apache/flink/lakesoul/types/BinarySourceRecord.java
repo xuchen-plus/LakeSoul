@@ -141,7 +141,7 @@ public class BinarySourceRecord {
         }
 
         JsonNode source = valueNode.get("source");
-        String databaseName = source.get("schema").asText();
+        String databaseName = source.get("db").asText();
         String tableName = source.get("table").asText();
 
         TableId tableId = new TableId("lakesoul", databaseName, tableName);

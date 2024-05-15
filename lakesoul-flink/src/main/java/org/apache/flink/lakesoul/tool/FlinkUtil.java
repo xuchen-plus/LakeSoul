@@ -32,7 +32,6 @@ import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.BinaryType;
 import org.apache.flink.table.types.logical.BooleanType;
-import org.apache.flink.table.types.logical.DateType;
 import org.apache.flink.table.types.logical.DoubleType;
 import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.FloatType;
@@ -54,12 +53,14 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static java.time.ZoneId.SHORT_IDS;
+import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE;
+import static java.time.format.DateTimeFormatter.ISO_LOCAL_TIME;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.*;
 import static org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM;
 import static org.apache.flink.table.types.logical.utils.LogicalTypeChecks.isCompositeType;
@@ -172,9 +173,11 @@ public class FlinkUtil {
             case "tinyblob":
             case "mediumblob":
             case "longblob":
+            case "raw":
+            case "bfile":
+            case "long":
                 return new BinaryType(nullable, Integer.MAX_VALUE);
             case "bigint":
-            case "long":
                 if (unsigned) {
                     return new VarCharType(nullable, Integer.MAX_VALUE);
                 } else {
@@ -188,24 +191,29 @@ public class FlinkUtil {
             case "smallint":
                 return new IntType(nullable);
             case "float":
+            case "binary_float":
                 if (unsigned) {
                     return new DoubleType(nullable);
                 } else {
                     return new FloatType(nullable);
                 }
             case "double":
+            case "number":
+            case "binary_double":
                 if (unsigned) {
                     return new VarCharType(nullable, Integer.MAX_VALUE);
                 } else {
                     return new DoubleType(nullable);
                 }
             case "date":
-                return new DateType(nullable);
+//                return new DateType(nullable);
             case "datetime":
             case "timestamp":
+            case "timestamp with time zone":
+            case "timestamp with local time zone":
                 return new LocalZonedTimestampType();
             case "decimal":
-                return new DecimalType(nullable, precision,scale);
+                return new DecimalType(nullable, precision, scale);
             case "char":
             case "varchar":
             case "string":
@@ -214,6 +222,11 @@ public class FlinkUtil {
             case "text":
             case "tinytext":
             case "json":
+            case "nchar":
+            case "varchar2":
+            case "nvarchar2":
+            case "clob":
+            case "nclob":
             default:
                 return new VarCharType(nullable, Integer.MAX_VALUE);
         }
@@ -563,42 +576,24 @@ public class FlinkUtil {
         return new JSONObject(map);
     }
 
-    public static DateTimeFormatter DP_DATETIME_FORMATTER;
-    public static DateTimeFormatter DP_DATETIME_FORMATTER_1;
-    public static DateTimeFormatter DP_DATETIME_FORMATTER_2;
-    public static DateTimeFormatter DP_DATETIME_FORMATTER_3;
-    public static DateTimeFormatter DP_DATETIME_FORMATTER_4;
-    public static DateTimeFormatter DP_DATETIME_FORMATTER_5;
-    public static DateTimeFormatter DP_DATETIME_FORMATTER_6;
-    static {
-        DP_DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-        DP_DATETIME_FORMATTER_1 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.S");
-        DP_DATETIME_FORMATTER_2 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SS");
-        DP_DATETIME_FORMATTER_3 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
-        DP_DATETIME_FORMATTER_4 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSS");
-        DP_DATETIME_FORMATTER_5 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSS");
-        DP_DATETIME_FORMATTER_6 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS");
+    public static DateTimeFormatter ISO_DATE_TIME_WITH_ZONE = new DateTimeFormatterBuilder()
+            .parseCaseInsensitive()
+            .append(ISO_LOCAL_DATE)
+            .appendLiteral(' ')
+            .append(ISO_LOCAL_TIME)
+            .appendLiteral(' ')
+            .optionalStart()
+            .appendOffsetId()
+            .optionalStart()
+            .toFormatter();
 
-    }
+    public static DateTimeFormatter ISO_DATE_TIME = new DateTimeFormatterBuilder()
+            .parseCaseInsensitive()
+            .append(ISO_LOCAL_DATE)
+            .appendLiteral(' ')
+            .append(ISO_LOCAL_TIME)
+            .toFormatter();
 
-    public static DateTimeFormatter getDpDatetimeFormatter(int index) {
-        switch (index) {
-            case 1:
-                return DP_DATETIME_FORMATTER_1;
-            case 2:
-                return DP_DATETIME_FORMATTER_2;
-            case 3:
-                return DP_DATETIME_FORMATTER_3;
-            case 4:
-                return DP_DATETIME_FORMATTER_4;
-            case 5:
-                return DP_DATETIME_FORMATTER_5;
-            case 6:
-                return DP_DATETIME_FORMATTER_6;
-            default:
-                return DP_DATETIME_FORMATTER;
-        }
-    }
 
     public static boolean hasHdfsClasses() {
         try {

@@ -28,6 +28,7 @@ import io.debezium.time.Timestamp;
 import io.debezium.time.Year;
 import io.debezium.time.ZonedTime;
 import io.debezium.time.ZonedTimestamp;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.formats.json.JsonToRowDataConverters;
 import org.apache.flink.lakesoul.tool.FlinkUtil;
@@ -45,10 +46,10 @@ import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
@@ -57,7 +58,6 @@ import java.util.Map;
 import java.util.Objects;
 
 import static org.apache.flink.formats.common.TimestampFormat.ISO_8601;
-import static org.apache.flink.lakesoul.tool.FlinkUtil.DP_DATETIME_FORMATTER_6;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.CDC_CHANGE_COLUMN;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.CDC_CHANGE_COLUMN_DEFAULT;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.SORT_FIELD;
@@ -861,13 +861,36 @@ public class LakeSoulRecordConvert implements Serializable {
                 nullable = false;
             }
             fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale, nullable, unsigned)));
-            if (colType.equals("timestamp") || colType.equals("datetime")) {
-                String value = valueNode.get(colName).asText();
-                ZonedDateTime zonedDateTime = LocalDateTime.parse(value, DP_DATETIME_FORMATTER_6).atZone(serverTimeZone);
-                valueNode.put(colName, zonedDateTime.toInstant().toString());
-            } else if (colType.endsWith("blob") || colType.endsWith("binary") || colType.equals("bit")) {
-                String value = valueNode.get(colName).asText();
-                valueNode.put(colName, Base64.getDecoder().decode(value));
+            if (colType.equals("timestamp") || colType.equals("datetime") || colType.equals("date")
+                    || colType.equals("timestamp with local time zone")) {
+                JsonNode jsonNode = valueNode.get(colName);
+                if (!jsonNode.isNull()) {
+                    String value = jsonNode.asText();
+                    if (scale > 6 ) {
+                        if (!StringUtils.isEmpty(value)) {
+                            value = value.substring(0, 26);
+                        }
+                    }
+                    if (value.length() == 10) {
+                        value = value + " 00:00:00";
+                    }
+                    ZonedDateTime zonedDateTime = LocalDateTime.parse(value, FlinkUtil.ISO_DATE_TIME).atZone(serverTimeZone);
+                    valueNode.put(colName, zonedDateTime.toInstant().toString());
+                }
+            } else if (colType.equals("timestamp with time zone")) {
+                JsonNode jsonNode = valueNode.get(colName);
+                if (!jsonNode.isNull()) {
+                    String value = jsonNode.asText();
+                    ZonedDateTime zonedDateTime = OffsetDateTime.parse(value, FlinkUtil.ISO_DATE_TIME_WITH_ZONE).atZoneSameInstant(serverTimeZone);
+                    valueNode.put(colName, zonedDateTime.toInstant().toString());
+                }
+            } else if (colType.endsWith("blob") || colType.endsWith("binary") || colType.equals("bit")
+                    || colType.equals("raw") || colType.equals("bfile") || colType.equals("long")) {
+                JsonNode jsonNode = valueNode.get(colName);
+                if (!jsonNode.isNull()) {
+                    String value = jsonNode.asText();
+                    valueNode.put(colName, value.getBytes());
+                }
             }
         }
         fields.add(new RowType.RowField(SORT_FIELD, new BigIntType(true)));
@@ -898,13 +921,36 @@ public class LakeSoulRecordConvert implements Serializable {
                     nullable = false;
                 }
                 fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale, nullable, unsigned)));
-                if (colType.equals("timestamp") || colType.equals("datetime")) {
-                    String value = valueNode.get(colName).asText();
-                    ZonedDateTime zonedDateTime = LocalDateTime.parse(value, FlinkUtil.getDpDatetimeFormatter(precision)).atZone(serverTimeZone);
-                    valueNode.put(colName, zonedDateTime.toInstant().toString());
-                } else if (colType.endsWith("blob") || colType.endsWith("binary") || colType.equals("bit")) {
-                    String value = valueNode.get(colName).asText();
-                    valueNode.put(colName, value.getBytes());
+                if (colType.equals("timestamp") || colType.equals("datetime") || colType.equals("date")
+                        || colType.equals("timestamp with local time zone")) {
+                    JsonNode jsonNode = valueNode.get(colName);
+                    if (!jsonNode.isNull()) {
+                        String value = jsonNode.asText();
+                        if (scale > 6 ) {
+                            if (!StringUtils.isEmpty(value)) {
+                                value = value.substring(0, 26);
+                            }
+                        }
+                        if (value.length() == 10) {
+                            value = value + " 00:00:00";
+                        }
+                        ZonedDateTime zonedDateTime = LocalDateTime.parse(value, FlinkUtil.ISO_DATE_TIME).atZone(serverTimeZone);
+                        valueNode.put(colName, zonedDateTime.toInstant().toString());
+                    }
+                } else if (colType.equals("timestamp with time zone")) {
+                    JsonNode jsonNode = valueNode.get(colName);
+                    if (!jsonNode.isNull()) {
+                        String value = jsonNode.asText();
+                        ZonedDateTime zonedDateTime = OffsetDateTime.parse(value, FlinkUtil.ISO_DATE_TIME_WITH_ZONE).atZoneSameInstant(serverTimeZone);
+                        valueNode.put(colName, zonedDateTime.toInstant().toString());
+                    }
+                } else if (colType.endsWith("blob") || colType.endsWith("binary") || colType.equals("bit")
+                        || colType.equals("raw") || colType.equals("bfile") || colType.equals("long")) {
+                    JsonNode jsonNode = valueNode.get(colName);
+                    if (!jsonNode.isNull()) {
+                        String value = jsonNode.asText();
+                        valueNode.put(colName, value.getBytes());
+                    }
                 }
             }
         });
