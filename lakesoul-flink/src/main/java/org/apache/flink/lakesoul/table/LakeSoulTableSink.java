@@ -223,4 +223,40 @@ public class LakeSoulTableSink implements DynamicTableSink, SupportsPartitioning
             }
         }
     }
+
+    public String getSummaryName() {
+        return summaryName;
+    }
+
+    public String getTableName() {
+        return tableName;
+    }
+
+    public DataType getDataType() {
+        return dataType;
+    }
+
+    public ResolvedSchema getSchema() {
+        return schema;
+    }
+
+    public Configuration getFlinkConf() {
+        return flinkConf;
+    }
+
+    public List<String> getPrimaryKeyList() {
+        return primaryKeyList;
+    }
+
+    public List<String> getPartitionKeyList() {
+        return partitionKeyList;
+    }
+
+    public boolean isOverwrite() {
+        return overwrite;
+    }
+
+    public LakeSoulRowLevelModificationScanContext getModificationContext() {
+        return modificationContext;
+    }
 }

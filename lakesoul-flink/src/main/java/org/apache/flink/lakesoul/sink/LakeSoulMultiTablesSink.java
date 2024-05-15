@@ -124,4 +124,8 @@ public class LakeSoulMultiTablesSink<IN> implements
         // StreamingFileSink
         return Collections.singleton("lakesoul-cdc-multitable-bucket-states");
     }
+
+    public BucketsBuilder<IN, ? extends BucketsBuilder<IN, ?>> getBucketsBuilder() {
+        return bucketsBuilder;
+    }
 }

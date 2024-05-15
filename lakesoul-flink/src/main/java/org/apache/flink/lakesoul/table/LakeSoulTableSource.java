@@ -278,4 +278,36 @@ public class LakeSoulTableSource
     public LakeSoulRowLevelModificationScanContext getModificationContext() {
         return modificationContext;
     }
+
+    public TableId getTableId() {
+        return tableId;
+    }
+
+    public RowType getRowType() {
+        return rowType;
+    }
+
+    public boolean isStreaming() {
+        return isStreaming;
+    }
+
+    public List<String> getPkColumns() {
+        return pkColumns;
+    }
+
+    public int[][] getProjectedFields() {
+        return projectedFields;
+    }
+
+    public Map<String, String> getOptionParams() {
+        return optionParams;
+    }
+
+    public List<Map<String, String>> getRemainingPartitions() {
+        return remainingPartitions;
+    }
+
+    public Plan getFilter() {
+        return filter;
+    }
 }

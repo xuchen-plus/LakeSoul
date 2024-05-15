@@ -463,8 +463,9 @@ SPDX-License-Identifier: Apache-2.0
                     </execution>
                 </executions>
                 <configuration>
-                    <createDependencyReducedPom>true</createDependencyReducedPom>
-                    <useDependencyReducedPomInJar>true</useDependencyReducedPomInJar>
+                    <shadedArtifactAttached>true</shadedArtifactAttached>
+                    <shadedClassifierName>shaded</shadedClassifierName>
+                    <createDependencyReducedPom>false</createDependencyReducedPom>
                     <artifactSet>
                         <includes>
                             <include>com.dmetasoul:lakesoul-spark</include>

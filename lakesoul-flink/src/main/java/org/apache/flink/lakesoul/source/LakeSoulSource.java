@@ -225,4 +225,36 @@ public class LakeSoulSource implements Source<RowData, LakeSoulSplit, LakeSoulPe
     public SimpleVersionedSerializer<LakeSoulPendingSplits> getEnumeratorCheckpointSerializer() {
         return new SimpleLakeSoulPendingSplitsSerializer();
     }
+
+    public TableId getTableId() {
+        return tableId;
+    }
+
+    public RowType getRowType() {
+        return rowType;
+    }
+
+    public RowType getRowTypeWithPk() {
+        return rowTypeWithPk;
+    }
+
+    public boolean isStreaming() {
+        return isStreaming;
+    }
+
+    public List<String> getPkColumns() {
+        return pkColumns;
+    }
+
+    public Map<String, String> getOptionParams() {
+        return optionParams;
+    }
+
+    @Nullable public List<Map<String, String>> getRemainingPartitions() {
+        return remainingPartitions;
+    }
+
+    @Nullable public Plan getFilter() {
+        return filter;
+    }
 }
