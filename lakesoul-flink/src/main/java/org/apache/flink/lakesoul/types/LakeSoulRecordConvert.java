@@ -892,11 +892,6 @@ public class LakeSoulRecordConvert implements Serializable {
                 JsonNode jsonNode = valueNode.get(colName);
                 if (!jsonNode.isNull()) {
                     String value = jsonNode.asText();
-                    if (scale > 6 ) {
-                        if (!StringUtils.isEmpty(value)) {
-                            value = value.substring(0, 26);
-                        }
-                    }
                     if (value.length() == 10) {
                         value = value + " 00:00:00";
                     }
@@ -952,11 +947,6 @@ public class LakeSoulRecordConvert implements Serializable {
                     JsonNode jsonNode = valueNode.get(colName);
                     if (!jsonNode.isNull()) {
                         String value = jsonNode.asText();
-                        if (scale > 6 ) {
-                            if (!StringUtils.isEmpty(value)) {
-                                value = value.substring(0, 26);
-                            }
-                        }
                         if (value.length() == 10) {
                             value = value + " 00:00:00";
                         }
