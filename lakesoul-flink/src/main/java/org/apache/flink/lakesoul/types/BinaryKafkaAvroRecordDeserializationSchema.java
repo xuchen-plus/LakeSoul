@@ -20,6 +20,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Properties;
 
 public class BinaryKafkaAvroRecordDeserializationSchema implements KafkaRecordDeserializationSchema<BinarySourceRecord> {
     LakeSoulRecordConvert convert;
@@ -28,13 +29,13 @@ public class BinaryKafkaAvroRecordDeserializationSchema implements KafkaRecordDe
 
     private transient KafkaAvroDeserializer inner;
 
-    private final String registryUrl;
+    private final Properties properties;
 
-    public BinaryKafkaAvroRecordDeserializationSchema(LakeSoulRecordConvert convert, String basePath, String registryUrl) {
+    public BinaryKafkaAvroRecordDeserializationSchema(LakeSoulRecordConvert convert, String basePath, Properties properties) {
         this.convert = convert;
         this.basePath = basePath;
         objectMapper = new ObjectMapper();
-        this.registryUrl = registryUrl;
+        this.properties = properties;
     }
 
     @Override
@@ -63,12 +64,11 @@ public class BinaryKafkaAvroRecordDeserializationSchema implements KafkaRecordDe
 
     private void checkInitialized() {
         if (inner == null) {
-            Map<String, Object> props = new HashMap<>();
-            props.put(AbstractKafkaAvroSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, registryUrl);
+            Map<String, Object> props = new HashMap<String, Object>((Map) properties);
             props.put(KafkaAvroDeserializerConfig.SPECIFIC_AVRO_READER_CONFIG, false);
             SchemaRegistryClient client =
-                    new CachedSchemaRegistryClient(
-                            registryUrl, AbstractKafkaAvroSerDeConfig.MAX_SCHEMAS_PER_SUBJECT_DEFAULT);
+                    new CachedSchemaRegistryClient((String) props.get(AbstractKafkaAvroSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG),
+                            AbstractKafkaAvroSerDeConfig.MAX_SCHEMAS_PER_SUBJECT_DEFAULT, props);
             inner = new KafkaAvroDeserializer(client, props);
         }
     }

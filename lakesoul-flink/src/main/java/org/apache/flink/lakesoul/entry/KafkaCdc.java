@@ -196,7 +196,7 @@ public class KafkaCdc {
             binarySourceRecordKafkaSourceBuilder.setTopics(Arrays.asList(kafkaTopic.split(",")));
         }
         if (kafkaDataAvroType) {
-            binarySourceRecordKafkaSourceBuilder.setDeserializer(new BinaryKafkaAvroRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH), schemaRegistryUrl));
+            binarySourceRecordKafkaSourceBuilder.setDeserializer(new BinaryKafkaAvroRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH), pro));
         } else {
             binarySourceRecordKafkaSourceBuilder.setDeserializer(new BinaryKafkaRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH)));
         }
