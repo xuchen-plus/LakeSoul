@@ -119,6 +119,10 @@ public class LakeSoulKafkaSinkOptions extends LakeSoulSinkOptions{
             .defaultValue(true)
             .withDescription("Kafka Topic Name is Regular Expression");
 
-
+    public static final ConfigOption<String> DBNAME = ConfigOptions
+            .key("dbname")
+            .stringType()
+            .defaultValue(null)
+            .withDescription("Database for Data Entry into LakeSoul");
 
 }

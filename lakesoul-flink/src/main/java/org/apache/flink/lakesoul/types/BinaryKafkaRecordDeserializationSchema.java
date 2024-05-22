@@ -18,10 +18,13 @@ public class BinaryKafkaRecordDeserializationSchema implements KafkaRecordDeseri
     String basePath;
     private ObjectMapper objectMapper;
 
-    public BinaryKafkaRecordDeserializationSchema(LakeSoulRecordConvert convert, String basePath) {
+    private String dbName;
+
+    public BinaryKafkaRecordDeserializationSchema(LakeSoulRecordConvert convert, String basePath, String dbName) {
         this.convert = convert;
         this.basePath = basePath;
         objectMapper = new ObjectMapper();
+        this.dbName = dbName;
 //        objectMapper = JacksonMapperFactory.createObjectMapper()
 //                        .configure(JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS.mappedFeature(),true);
     }
@@ -29,7 +32,7 @@ public class BinaryKafkaRecordDeserializationSchema implements KafkaRecordDeseri
     @Override
     public void deserialize(ConsumerRecord<byte[], byte[]> consumerRecord, Collector<BinarySourceRecord> collector) throws IOException {
         try {
-            collector.collect(BinarySourceRecord.fromKafkaSourceRecord(consumerRecord, this.convert, this.basePath, objectMapper));
+            collector.collect(BinarySourceRecord.fromKafkaSourceRecord(consumerRecord, this.convert, this.basePath, this.dbName, objectMapper));
         } catch (Exception e) {
             throw new IOException(String.format("Failed to deserialize consumer record %s.", e.getMessage()), e);
         }

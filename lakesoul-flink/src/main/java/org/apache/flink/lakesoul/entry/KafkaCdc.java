@@ -80,6 +80,7 @@ public class KafkaCdc {
         String schemaRegistryUrl = parameter.get(SCHEMA_REGISTRY_URL.key(), SCHEMA_REGISTRY_URL.defaultValue());
         boolean regularTopicName = parameter.getBoolean(REGULAR_TOPIC_NAME.key(), REGULAR_TOPIC_NAME.defaultValue());
         boolean kafkaDataAvroType = parameter.getBoolean(KAFKA_DATA_AVRO_TYPE.key(), KAFKA_DATA_AVRO_TYPE.defaultValue());
+        String dbName = parameter.get(DBNAME.key(), DBNAME.defaultValue());
 
         //about security
         String securityProtocol = parameter.get(SECURITY_PROTOCOL.key());
@@ -196,9 +197,9 @@ public class KafkaCdc {
             binarySourceRecordKafkaSourceBuilder.setTopics(Arrays.asList(kafkaTopic.split(",")));
         }
         if (kafkaDataAvroType) {
-            binarySourceRecordKafkaSourceBuilder.setDeserializer(new BinaryKafkaAvroRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH), pro));
+            binarySourceRecordKafkaSourceBuilder.setDeserializer(new BinaryKafkaAvroRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH), pro, dbName));
         } else {
-            binarySourceRecordKafkaSourceBuilder.setDeserializer(new BinaryKafkaRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH)));
+            binarySourceRecordKafkaSourceBuilder.setDeserializer(new BinaryKafkaRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH), dbName));
         }
 
         KafkaSource<BinarySourceRecord> kafkaSource = binarySourceRecordKafkaSourceBuilder.build();

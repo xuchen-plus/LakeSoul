@@ -31,10 +31,13 @@ public class BinaryKafkaAvroRecordDeserializationSchema implements KafkaRecordDe
 
     private final Properties properties;
 
-    public BinaryKafkaAvroRecordDeserializationSchema(LakeSoulRecordConvert convert, String basePath, Properties properties) {
+    private final String dbName;
+
+    public BinaryKafkaAvroRecordDeserializationSchema(LakeSoulRecordConvert convert, String basePath, Properties properties, String dbName) {
         this.convert = convert;
         this.basePath = basePath;
         objectMapper = new ObjectMapper();
+        this.dbName = dbName;
         this.properties = properties;
     }
 
@@ -50,7 +53,8 @@ public class BinaryKafkaAvroRecordDeserializationSchema implements KafkaRecordDe
             GenericRecord keyRecord = (GenericRecord) inner.deserialize(topic, key);
             GenericRecord valueRecord = (GenericRecord) inner.deserialize(topic, value);
 
-            BinarySourceRecord binarySourceRecord = BinarySourceRecord.fromKafkaAvroSourceRecord(consumerRecord, keyRecord, valueRecord, this.convert, this.basePath, objectMapper);
+            BinarySourceRecord binarySourceRecord = BinarySourceRecord.fromKafkaAvroSourceRecord(consumerRecord, keyRecord,
+                    valueRecord, this.convert, this.basePath, this.dbName, objectMapper);
             collector.collect(binarySourceRecord);
         } catch (Exception e) {
             throw new IOException(String.format("Failed to deserialize consumer record %s.", e.getMessage()), e);

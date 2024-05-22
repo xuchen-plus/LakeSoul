@@ -116,6 +116,7 @@ public class BinarySourceRecord {
     public static BinarySourceRecord fromKafkaSourceRecord(ConsumerRecord consumerRecord,
                                                            LakeSoulRecordConvert convert,
                                                            String basePath,
+                                                           String dbName,
                                                            ObjectMapper objectMapper) throws Exception {
 
         String topic = consumerRecord.topic();
@@ -144,7 +145,11 @@ public class BinarySourceRecord {
         String databaseName = source.get("db").asText();
         String tableName = source.get("table").asText();
 
-        TableId tableId = new TableId("lakesoul", databaseName, tableName);
+        if (StringUtils.isEmpty(dbName)) {
+            dbName = databaseName;
+        }
+        String realTable = String.format("s_%s_%s", databaseName, tableName);
+        TableId tableId = new TableId("lakesoul", dbName, realTable);
 
         String opType = valueNode.get("op").asText();
         long tsMs = source.get("ts_ms").asLong();
@@ -175,6 +180,7 @@ public class BinarySourceRecord {
                                                            GenericRecord valueRecord,
                                                            LakeSoulRecordConvert convert,
                                                            String basePath,
+                                                           String dbName,
                                                            ObjectMapper objectMapper) throws Exception {
 
 
@@ -213,7 +219,11 @@ public class BinarySourceRecord {
             }
             ((ObjectNode) valueNode).remove("table");
         }
-        TableId tableId = new TableId("lakesoul", databaseName, tableName);
+        if (StringUtils.isEmpty(dbName)) {
+            dbName = databaseName;
+        }
+        String realTable = String.format("s_%s_%s", databaseName, tableName);
+        TableId tableId = new TableId("lakesoul", dbName, realTable);
 
         long sortField = offset;
 
