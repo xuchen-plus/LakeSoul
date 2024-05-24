@@ -9,15 +9,11 @@ import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Field;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Schema;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Struct;
 import com.ververica.cdc.debezium.utils.TemporalConversions;
+import io.debezium.data.*;
 import io.debezium.data.Enum;
-import io.debezium.data.EnumSet;
-import io.debezium.data.Envelope;
-import io.debezium.data.Json;
 import io.debezium.time.MicroDuration;
 import io.debezium.data.geometry.Geometry;
 import io.debezium.data.geometry.Point;
-import io.debezium.data.SpecialValueDecimal;
-import io.debezium.data.VariableScaleDecimal;
 import io.debezium.time.Date;
 import io.debezium.time.MicroTime;
 import io.debezium.time.MicroTimestamp;
@@ -28,7 +24,6 @@ import io.debezium.time.Timestamp;
 import io.debezium.time.Year;
 import io.debezium.time.ZonedTime;
 import io.debezium.time.ZonedTimestamp;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.formats.json.JsonToRowDataConverters;
 import org.apache.flink.lakesoul.tool.FlinkUtil;
@@ -41,6 +36,7 @@ import org.apache.flink.table.data.writer.BinaryRowWriter;
 import org.apache.flink.table.types.logical.*;
 import org.apache.flink.types.RowKind;
 
+import java.io.IOException;
 import java.io.Serializable;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
@@ -200,7 +196,7 @@ public class LakeSoulRecordConvert implements Serializable {
 //        colNames[useCDC ? arity - 3 : arity - 2] = BINLOG_FILE_INDEX;
 //        colTypes[useCDC ? arity - 3 : arity - 2] = new BigIntType();
         colNames[useCDC ? arity - 2 : arity - 1] = SORT_FIELD;
-        colTypes[useCDC ? arity - 2 : arity - 1] = new BigIntType();
+        colTypes[useCDC ? arity - 2 : arity - 1] = new BigIntType(false);
         if (useCDC) {
             colNames[arity - 1] = cdcColumn;
             colTypes[arity - 1] = new VarCharType(false, Integer.MAX_VALUE);
@@ -285,6 +281,14 @@ public class LakeSoulRecordConvert implements Serializable {
                     byteLen = len / 8 + (len % 8 == 0 ? 0 : 1);
                 }
                 return new VarBinaryType(nullable, byteLen);
+            case Bits.LOGICAL_NAME:
+                Map<String, String> parameters = fieldSchema.parameters();
+                int bytesLen = Integer.MAX_VALUE;
+                if (null != parameters) {
+                    int len = Integer.parseInt(parameters.get("length"));
+                    bytesLen = len / 8 + (len % 8 == 0 ? 0 : 1);
+                }
+                return new VarBinaryType(nullable, bytesLen);
             default:
                 return null;
         }
@@ -446,6 +450,9 @@ public class LakeSoulRecordConvert implements Serializable {
                 break;
             case Year.SCHEMA_NAME:
                 writeInt(writer, index, fieldValue);
+                break;
+            case Bits.LOGICAL_NAME:
+                writeBinary(writer, index, fieldValue);
                 break;
             case ZonedTime.SCHEMA_NAME:
             case ZonedTimestamp.SCHEMA_NAME:
@@ -886,9 +893,19 @@ public class LakeSoulRecordConvert implements Serializable {
             if (keyList.contains(colName)) {
                 nullable = false;
             }
+            if (colType.equals("timestamp")) {
+                JsonNode jsonNode = valueNode.get(colName);
+                if (!jsonNode.isNull()) {
+                    String value = jsonNode.asText();
+                    if (!value.contains(":")) {
+                        colType = "string";
+                    }
+                }
+            }
             fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale, nullable, unsigned)));
             if (colType.equals("timestamp") || colType.equals("datetime") || colType.equals("date")
-                    || colType.equals("timestamp with local time zone")) {
+                    || colType.equals("timestamp with local time zone") || colType.equals("smalldatetime")
+                    || colType.equals("datetime2")) {
                 JsonNode jsonNode = valueNode.get(colName);
                 if (!jsonNode.isNull()) {
                     String value = jsonNode.asText();
@@ -905,12 +922,32 @@ public class LakeSoulRecordConvert implements Serializable {
                     ZonedDateTime zonedDateTime = OffsetDateTime.parse(value, FlinkUtil.ISO_DATE_TIME_WITH_ZONE).atZoneSameInstant(serverTimeZone);
                     valueNode.put(colName, zonedDateTime.toInstant().toString());
                 }
-            } else if (colType.endsWith("blob") || colType.endsWith("binary") || colType.equals("bit")
-                    || colType.equals("raw") || colType.equals("bfile") || colType.equals("long")) {
+            } else if (colType.endsWith("blob") || colType.endsWith("binary") || colType.equals("raw")
+                    || colType.equals("bfile") || colType.equals("long") || colType.equals("image")
+                    || colType.equals("xml")) {
                 JsonNode jsonNode = valueNode.get(colName);
                 if (!jsonNode.isNull()) {
                     String value = jsonNode.asText();
                     valueNode.put(colName, value.getBytes());
+                }
+            } else if (colType.equals("bit")) {
+                JsonNode jsonNode = valueNode.get(colName);
+                if (!jsonNode.isNull()) {
+                    if (precision == 1) {
+                        String value = jsonNode.asText();
+                        if (value.equals("1") || value.equals(true)) {
+                            valueNode.put(colName, true);
+                        } else {
+                            valueNode.put(colName, false);
+                        }
+//                    } else {
+//                        try {
+//                            byte[] bytes = jsonNode.binaryValue();
+//                            valueNode.put(colName, bytes);
+//                        } catch (IOException e) {
+//                            throw new RuntimeException(e);
+//                        }
+                    }
                 }
             }
         }
@@ -941,9 +978,19 @@ public class LakeSoulRecordConvert implements Serializable {
                 if (keyList.contains(colName)) {
                     nullable = false;
                 }
+                if (colType.equals("timestamp")) {
+                    JsonNode jsonNode = valueNode.get(colName);
+                    if (!jsonNode.isNull()) {
+                        String value = jsonNode.asText();
+                        if (!value.contains(":")) {
+                            colType = "string";
+                        }
+                    }
+                }
                 fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale, nullable, unsigned)));
                 if (colType.equals("timestamp") || colType.equals("datetime") || colType.equals("date")
-                        || colType.equals("timestamp with local time zone")) {
+                        || colType.equals("timestamp with local time zone") || colType.equals("smalldatetime")
+                        || colType.equals("datetime2")) {
                     JsonNode jsonNode = valueNode.get(colName);
                     if (!jsonNode.isNull()) {
                         String value = jsonNode.asText();
@@ -953,19 +1000,43 @@ public class LakeSoulRecordConvert implements Serializable {
                         ZonedDateTime zonedDateTime = LocalDateTime.parse(value, FlinkUtil.ISO_DATE_TIME).atZone(serverTimeZone);
                         valueNode.put(colName, zonedDateTime.toInstant().toString());
                     }
-                } else if (colType.equals("timestamp with time zone")) {
+                } else if (colType.equals("timestamp with time zone") || colType.equals("datetimeoffset")) {
                     JsonNode jsonNode = valueNode.get(colName);
                     if (!jsonNode.isNull()) {
                         String value = jsonNode.asText();
                         ZonedDateTime zonedDateTime = OffsetDateTime.parse(value, FlinkUtil.ISO_DATE_TIME_WITH_ZONE).atZoneSameInstant(serverTimeZone);
                         valueNode.put(colName, zonedDateTime.toInstant().toString());
                     }
-                } else if (colType.endsWith("blob") || colType.endsWith("binary") || colType.equals("bit")
-                        || colType.equals("raw") || colType.equals("bfile") || colType.equals("long")) {
+                } else if (colType.endsWith("blob") || colType.endsWith("binary") || colType.equals("raw")
+                        || colType.equals("bfile") || colType.equals("long") || colType.equals("image")
+                        || colType.equals("xml")) {
                     JsonNode jsonNode = valueNode.get(colName);
                     if (!jsonNode.isNull()) {
                         String value = jsonNode.asText();
                         valueNode.put(colName, value.getBytes());
+                    }
+                } else if (colType.equals("bit")) {
+                    JsonNode jsonNode = valueNode.get(colName);
+                    if (!jsonNode.isNull()) {
+                        if (precision == 1) {
+                            String value = jsonNode.asText();
+                            if (value.equals("1") || value.equals(true)) {
+                                valueNode.put(colName, true);
+                            } else {
+                                valueNode.put(colName, false);
+                            }
+//                        } else {
+//                            try {
+//                                byte[] bytes = jsonNode.binaryValue();
+//                                System.out.println(bytes);
+//                                System.out.println(new String(bytes));
+//                            } catch (IOException e) {
+//                                throw new RuntimeException(e);
+//                            }
+//                            String value = jsonNode.asText();
+//                            System.out.println(value);
+//                            valueNode.put(colName, value.getBytes());
+                        }
                     }
                 }
             }

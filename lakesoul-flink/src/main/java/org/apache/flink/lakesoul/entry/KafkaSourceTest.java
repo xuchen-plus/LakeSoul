@@ -47,7 +47,7 @@ public class KafkaSourceTest {
                 .setTopics("test")
                 .setGroupId("my-group-test-2")
                 .setStartingOffsets(OffsetsInitializer.earliest())
-                .setDeserializer(new BinaryKafkaRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH)))
+                .setDeserializer(new BinaryKafkaRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH), null))
                 .build();
 
 

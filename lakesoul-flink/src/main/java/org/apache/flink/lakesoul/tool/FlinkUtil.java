@@ -167,6 +167,12 @@ public class FlinkUtil {
             case "boolean":
                 return new BooleanType(nullable);
             case "bit":
+                if (precision > 1) {
+//                    return new BinaryType(nullable, Integer.MAX_VALUE);
+                    return new VarCharType(nullable, Integer.MAX_VALUE);
+                } else {
+                    return new BooleanType(nullable);
+                }
             case "binary":
             case "varbinary":
             case "blob":
@@ -176,6 +182,8 @@ public class FlinkUtil {
             case "raw":
             case "bfile":
             case "long":
+            case "image":
+            case "xml":
                 return new BinaryType(nullable, Integer.MAX_VALUE);
             case "bigint":
                 if (unsigned) {
@@ -189,6 +197,7 @@ public class FlinkUtil {
                 if (unsigned) return new BigIntType(nullable);
             case "tinyint":
             case "smallint":
+            case "year":
                 return new IntType(nullable);
             case "float":
             case "binary_float":
@@ -197,8 +206,11 @@ public class FlinkUtil {
                 } else {
                     return new FloatType(nullable);
                 }
+            case "real":
             case "double":
             case "number":
+            case "money":
+            case "smallmoney":
             case "binary_double":
                 if (unsigned) {
                     return new VarCharType(nullable, Integer.MAX_VALUE);
@@ -208,11 +220,14 @@ public class FlinkUtil {
             case "date":
 //                return new DateType(nullable);
             case "datetime":
+            case "datetime2":
+            case "datetimeoffset":
             case "timestamp":
             case "timestamp with time zone":
             case "timestamp with local time zone":
                 return new LocalZonedTimestampType();
             case "decimal":
+            case "numeric":
                 return new DecimalType(nullable, precision, scale);
             case "char":
             case "varchar":
@@ -220,6 +235,7 @@ public class FlinkUtil {
             case "longtext":
             case "mediumtext":
             case "text":
+            case "ntext":
             case "tinytext":
             case "json":
             case "nchar":
@@ -227,6 +243,9 @@ public class FlinkUtil {
             case "nvarchar2":
             case "clob":
             case "nclob":
+            case "enum":
+            case "uniqueidentifier":
+            case "sql_variant":
             default:
                 return new VarCharType(nullable, Integer.MAX_VALUE);
         }
@@ -476,7 +495,7 @@ public class FlinkUtil {
     }
 
     public static DataFileInfo[] getTargetDataFileInfo(TableInfo tif, List<Map<String, String>> remainingPartitions) {
-        if (remainingPartitions == null || remainingPartitions.size() == 0) {
+        if (remainingPartitions == null) {
             return DataOperation.getTableDataInfo(tif.getTableId());
         } else {
             List<String> partitionDescs = remainingPartitions.stream()
