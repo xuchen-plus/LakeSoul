@@ -131,6 +131,11 @@ public final class ArrowUtils {
                     new RowType.RowField(f.getName(), ArrowUtils.fromArrowField(f))).collect(Collectors.toList()));
         } else if (field.getType() instanceof ArrowType.List) {
             return new ArrayType(fromArrowField(field.getChildren().get(0)));
+        } else if (field.getType() instanceof ArrowType.Map) {
+            Field itemField = field.getChildren().get(0);
+            LogicalType keyType = fromArrowField(itemField.getChildren().get(0));
+            LogicalType valueType = fromArrowField(itemField.getChildren().get(1));
+            return new MapType(field.isNullable(), keyType, valueType);
         }
         LogicalType logicalType = field.getType().accept(ArrowTypeToLogicalTypeConverter.INSTANCE);
         if (logicalType == null)
