@@ -11,11 +11,13 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::{
     new_null_array, types::*, ArrayRef, BooleanArray, PrimitiveArray, RecordBatchOptions, StringArray, StructArray,
 };
-use arrow_schema::{DataType, Field, Schema, SchemaBuilder, SchemaRef, TimeUnit, FieldRef, Fields};
+use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaBuilder, SchemaRef, TimeUnit};
+use chrono::Duration;
 use datafusion::error::Result;
-use datafusion_common::DataFusionError::{ArrowError, External};
+use datafusion_common::DataFusionError::{ArrowError, External, Internal};
 
-use crate::constant::{ARROW_CAST_OPTIONS, LAKESOUL_EMPTY_STRING, LAKESOUL_NULL_STRING};
+use crate::constant::{ARROW_CAST_OPTIONS, DATE32_FORMAT, LAKESOUL_EMPTY_STRING, LAKESOUL_NULL_STRING, TIMESTAMP_MICROSECOND_FORMAT, TIMESTAMP_MILLSECOND_FORMAT, TIMESTAMP_NANOSECOND_FORMAT, TIMESTAMP_SECOND_FORMAT};
+// use crate::helpers::{date_str_to_epoch_days, timestamp_str_to_unix_time};
 
 /// adjust time zone to UTC
 pub fn uniform_field(orig_field: &FieldRef) -> FieldRef {
@@ -29,7 +31,7 @@ pub fn uniform_field(orig_field: &FieldRef) -> FieldRef {
         DataType::Struct(fields) => Arc::new(Field::new(
             orig_field.name(),
             DataType::Struct(Fields::from(fields.iter().map(uniform_field).collect::<Vec<_>>())),
-            orig_field.is_nullable()
+            orig_field.is_nullable(),
         )),
         _ => orig_field.clone(),
     }
@@ -38,11 +40,7 @@ pub fn uniform_field(orig_field: &FieldRef) -> FieldRef {
 /// adjust time zone to UTC
 pub fn uniform_schema(orig_schema: SchemaRef) -> SchemaRef {
     Arc::new(Schema::new(
-        orig_schema
-            .fields()
-            .iter()
-            .map(uniform_field)
-            .collect::<Vec<_>>(),
+        orig_schema.fields().iter().map(uniform_field).collect::<Vec<_>>(),
     ))
 }
 
@@ -151,10 +149,10 @@ pub fn transform_array(
                 .with_timezone_opt(Some(target_tz))
                 .into_data(),
         }),
-        DataType::Struct(target_child_fileds) => {
+        DataType::Struct(target_child_fields) => {
             let orig_array = as_struct_array(&array);
             let mut child_array = vec![];
-            target_child_fileds.iter().try_for_each(|field| -> Result<()> {
+            target_child_fields.iter().try_for_each(|field| -> Result<()> {
                 match orig_array.column_by_name(field.name()) {
                     Some(array) => {
                         child_array.push((
@@ -239,6 +237,56 @@ pub fn make_default_array(datatype: &DataType, value: &String, num_rows: usize) 
                 )?;
             num_rows
         ])),
+        DataType::Timestamp(unit, _timezone) => {
+            match unit {
+                TimeUnit::Second => Arc::new(PrimitiveArray::<TimestampSecondType>::from(vec![
+                    // first try parsing epoch second int64 (for spark)
+                    if let  Ok(unix_time) = value.as_str().parse::<i64>() {
+                        unix_time
+                    } else {
+                        // then try parsing string timestamp to epoch seconds (for flink)
+                        timestamp_str_to_unix_time(value, TIMESTAMP_SECOND_FORMAT)?.num_seconds()
+                    };
+                    num_rows
+                ])),
+                TimeUnit::Millisecond =>  Arc::new(PrimitiveArray::<TimestampMillisecondType>::from(vec![
+                    // first try parsing epoch second int64 (for spark)
+                    if let  Ok(unix_time) = value.as_str().parse::<i64>() {
+                        unix_time
+                    } else {
+                        // then try parsing string timestamp to epoch seconds (for flink)
+                        timestamp_str_to_unix_time(value, TIMESTAMP_MILLSECOND_FORMAT)?.num_milliseconds()
+                    };
+                    num_rows
+                ])),
+                TimeUnit::Microsecond => Arc::new(PrimitiveArray::<TimestampMicrosecondType>::from(vec![
+                    // first try parsing epoch second int64 (for spark)
+                    if let  Ok(unix_time) = value.as_str().parse::<i64>() {
+                        unix_time
+                    } else {
+                        // then try parsing string timestamp to epoch seconds (for flink)
+                        match timestamp_str_to_unix_time(value, TIMESTAMP_MICROSECOND_FORMAT)?.num_microseconds() {
+                            Some(microsecond) => microsecond,
+                            None => return Err(Internal("microsecond is out of range".to_string()))
+                        }
+                    };
+                    num_rows
+                ])),
+                TimeUnit::Nanosecond => Arc::new(PrimitiveArray::<TimestampNanosecondType>::from(vec![
+                    // first try parsing epoch second int64 (for spark)
+                    if let  Ok(unix_time) = value.as_str().parse::<i64>() {
+                        unix_time
+                    } else {
+                        // then try parsing string timestamp to epoch seconds (for flink)
+                        match timestamp_str_to_unix_time(value, TIMESTAMP_NANOSECOND_FORMAT)?.num_nanoseconds() {
+                            Some(nanosecond) => nanosecond,
+                            None => return Err(Internal("nanoseconds is out of range".to_string()))
+                        }
+                    };
+                    num_rows
+                ]))
+            }
+        }
         DataType::Boolean => Arc::new(BooleanArray::from(vec![
             value
                 .as_str()
@@ -256,9 +304,23 @@ pub fn make_default_array(datatype: &DataType, value: &String, num_rows: usize) 
     })
 }
 
-fn date_str_to_epoch_days(value: &str) -> Result<i32> {
-    let date = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|e| External(Box::new(e)))?;
-    let datetime = date.and_hms_opt(12, 12, 12).unwrap();
-    let epoch_time = chrono::NaiveDateTime::from_timestamp_millis(0).unwrap();
+pub fn date_str_to_epoch_days(value: &str) -> Result<i32> {
+    let date = chrono::NaiveDate::parse_from_str(value, DATE32_FORMAT).map_err(|e| External(Box::new(e)))?;
+    let datetime = date
+        .and_hms_opt(12, 12, 12)
+        .ok_or(Internal("invalid h/m/s".to_string()))?;
+    let epoch_time = chrono::NaiveDateTime::from_timestamp_millis(0).ok_or(Internal(
+        "the number of milliseconds is out of range for a NaiveDateTim".to_string(),
+    ))?;
+
     Ok(datetime.signed_duration_since(epoch_time).num_days() as i32)
+}
+
+pub fn timestamp_str_to_unix_time(value: &str, fmt: &str) -> Result<Duration> {
+    let datetime = chrono::NaiveDateTime::parse_from_str(value, fmt).map_err(|e| External(Box::new(e)))?;
+    let epoch_time = chrono::NaiveDateTime::from_timestamp_millis(0).ok_or(Internal(
+        "the number of milliseconds is out of range for a NaiveDateTim".to_string(),
+    ))?;
+
+    Ok(datetime.signed_duration_since(epoch_time))
 }
