@@ -160,12 +160,12 @@ public class TestUtils {
         tEnvs.executeSql(createSql);
         tEnvs.executeSql(
                         "INSERT INTO user_multi2 VALUES" +
-                                "(1, 'Bob', 90, TO_TIMESTAMP('1990-10-01 10:10:01.101001'), 'China')," +
-                                "(2, 'Alice', 80, TO_TIMESTAMP('1990-10-10 10:10:01.101001'), 'China'), " +
-                                "(3, 'Jack', 75,  TO_TIMESTAMP('1990-10-15 10:10:01.101001'), 'China')," +
-                                "(3, 'Amy', 95,  TO_TIMESTAMP('1990-10-10 10:10:01.101201'),'UK'), " +
-                                "(5, 'Tom', 75,  TO_TIMESTAMP('1990-10-01 10:10:01.101001'), 'UK')," +
-                                "(4, 'Mike', 70, TO_TIMESTAMP('1990-10-15 10:10:01.101001'), 'UK')")
+                                "(1, 'Bob', 90, TO_TIMESTAMP('1990-10-01 10:10:00'), 'China')," +
+                                "(2, 'Alice', 80, TO_TIMESTAMP('1990-10-10 10:10:00'), 'China'), " +
+                                "(3, 'Jack', 75,  TO_TIMESTAMP('1990-10-15 10:10:00'), 'China')," +
+                                "(3, 'Amy', 95,  TO_TIMESTAMP('1990-10-10 10:10:01'),'UK'), " +
+                                "(5, 'Tom', 75,  TO_TIMESTAMP('1990-10-01 10:10:00'), 'UK')," +
+                                "(4, 'Mike', 70, TO_TIMESTAMP('1990-10-15 10:10:00'), 'UK')")
                 .await();
     }
 

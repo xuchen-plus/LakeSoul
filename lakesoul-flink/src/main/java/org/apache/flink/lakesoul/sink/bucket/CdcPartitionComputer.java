@@ -8,10 +8,12 @@ import org.apache.flink.connector.file.table.PartitionComputer;
 import org.apache.flink.lakesoul.tool.FlinkUtil;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.utils.DateTimeUtils;
 
 import java.time.LocalDate;
 import java.util.Arrays;
@@ -117,6 +119,8 @@ public class CdcPartitionComputer implements PartitionComputer<RowData> {
         // convert date to readable date string
         LocalDate d = LocalDate.ofEpochDay((Integer) field);
         partitionValue = d.toString();
+      } else if (partitionTypes[i].getTypeRoot() == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE) {
+        partitionValue = DateTimeUtils.formatTimestamp((TimestampData) field, "yyyy-MM-dd HH:mm:ss.SSSSSSSSS");
       } else {
         partitionValue = field.toString();
         if ("".equals(partitionValue)) {
@@ -125,6 +129,8 @@ public class CdcPartitionComputer implements PartitionComputer<RowData> {
       }
       partSpec.put(partitionColumns[i], partitionValue);
     }
+    System.out.println("[debug]generatePartValues");
+    System.out.println(partSpec);
     return partSpec;
   }
 
