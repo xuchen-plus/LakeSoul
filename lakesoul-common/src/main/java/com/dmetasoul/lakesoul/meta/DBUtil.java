@@ -261,7 +261,7 @@ public class DBUtil {
         }
         return partitionDesc.entrySet().stream().map(entry -> String.join(LAKESOUL_PARTITION_DESC_KV_DELIM,
                 entry.getKey(),
-                entry.getValue())).collect(Collectors.joining(LAKESOUL_RANGE_PARTITION_SPLITTER));
+                entry.getValue() == null ? LAKESOUL_NULL_STRING : entry.getValue())).collect(Collectors.joining(LAKESOUL_RANGE_PARTITION_SPLITTER));
     }
 
     public static LinkedHashMap<String, String> parsePartitionDesc(String partitionDesc) {
@@ -276,7 +276,11 @@ public class DBUtil {
             if (kv.length != 2 || kv[0].isEmpty()) {
                 throw new RuntimeException("Partition Desc " + part + " is not valid");
             }
-            descMap.put(kv[0], kv[1]);
+            if (kv[1].equals(LAKESOUL_NULL_STRING)) {
+                descMap.put(kv[0], null);
+            } else {
+                descMap.put(kv[0], kv[1]);
+            }
         }
         return descMap;
     }

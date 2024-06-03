@@ -20,6 +20,8 @@ import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.sql.*;
 import java.util.List;
@@ -27,6 +29,8 @@ import java.util.List;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkDatabasesOptions.*;
 
 public class SyncDatabase {
+
+    private static final Logger LOG = LoggerFactory.getLogger(SyncDatabase.class);
 
     public static void main(String[] args) throws SQLException {
         ParameterTool parameter = ParameterTool.fromArgs(args);
@@ -279,8 +283,9 @@ public class SyncDatabase {
         Catalog lakesoulCatalog = new LakeSoulCatalog();
         tEnvs.registerCatalog("lakeSoul", lakesoulCatalog);
         String jdbcUrl = url + targetDatabase;
-        TableResult schemaResult = tEnvs.executeSql(
-                "SELECT * FROM lakeSoul.`" + sourceDatabase + "`.`" + sourceTableName + "` LIMIT 1");
+        String selectSql = "SELECT * FROM lakeSoul.`" + sourceDatabase + "`.`" + sourceTableName + "` LIMIT 1";
+        LOG.info("select sql statement is: " + selectSql);
+        TableResult schemaResult = tEnvs.executeSql(selectSql);
         DataType[] fieldDataTypes = schemaResult.getTableSchema().getFieldDataTypes();
         String[] dorisFieldTypes = getDorisFieldTypes(fieldDataTypes);
         String[] fieldNames = schemaResult.getTableSchema().getFieldNames();
@@ -295,7 +300,10 @@ public class SyncDatabase {
         String sql = String.format(
                 "create table %s(%s) with ('connector' = '%s', 'jdbc-url' = '%s', 'fenodes' = '%s', 'table.identifier' = '%s', 'username' = '%s', 'password' = '%s')",
                 targetTableName, coulmns, "doris", jdbcUrl, fenodes, targetDatabase + "." + targetTableName, username, password);
+        LOG.info("create table statement is: " + sql);
         tEnvs.executeSql(sql);
-        tEnvs.executeSql("insert into " + targetTableName + " select * from lakeSoul.`" + sourceDatabase + "`." + sourceTableName);
+        String insertSql = "insert into " + targetTableName + " select * from lakeSoul.`" + sourceDatabase + "`." + sourceTableName;
+        LOG.info("insert into sql statement is: " + insertSql);
+        tEnvs.executeSql(insertSql);
     }
 }

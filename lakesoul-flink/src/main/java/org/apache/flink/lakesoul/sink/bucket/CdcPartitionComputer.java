@@ -121,6 +121,8 @@ public class CdcPartitionComputer implements PartitionComputer<RowData> {
         partitionValue = d.toString();
       } else if (partitionTypes[i].getTypeRoot() == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE) {
         partitionValue = DateTimeUtils.formatTimestamp((TimestampData) field, "yyyy-MM-dd HH:mm:ss.SSSSSSSSS");
+      } else if (partitionTypes[i].getTypeRoot() == LogicalTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE) {
+        partitionValue = DateTimeUtils.formatTimestamp((TimestampData) field, "yyyy-MM-dd HH:mm:ss.SSSSSSSSS");
       } else {
         partitionValue = field.toString();
         if ("".equals(partitionValue)) {
