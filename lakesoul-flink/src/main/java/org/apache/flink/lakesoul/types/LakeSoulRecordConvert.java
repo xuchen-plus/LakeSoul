@@ -12,6 +12,7 @@ import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Schema;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Struct;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.errors.DataException;
 import com.ververica.cdc.debezium.utils.TemporalConversions;
+import io.debezium.data.Bits;
 import io.debezium.data.Enum;
 import io.debezium.data.EnumSet;
 import io.debezium.data.Envelope;

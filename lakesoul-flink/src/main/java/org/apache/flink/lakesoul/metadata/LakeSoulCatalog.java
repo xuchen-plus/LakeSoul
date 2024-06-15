@@ -79,8 +79,6 @@ public class LakeSoulCatalog implements Catalog {
     private static final String TABLE_PATH = "path";
     private final DBManager dbManager;
 
-    private static final Logger LOG = LoggerFactory.getLogger(LakeSoulCatalog.class);
-
     public LakeSoulCatalog() {
         dbManager = new DBManager();
         createDatabase("default", new LakesoulCatalogDatabase(), true);

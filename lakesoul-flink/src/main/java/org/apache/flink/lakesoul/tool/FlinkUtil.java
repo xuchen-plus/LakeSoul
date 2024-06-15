@@ -88,6 +88,7 @@ import static org.apache.flink.lakesoul.tool.JobOptions.S3_ENDPOINT;
 import static org.apache.flink.lakesoul.tool.JobOptions.S3_PATH_STYLE_ACCESS;
 import static org.apache.flink.lakesoul.tool.JobOptions.S3_SECRET_KEY;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.BUCKET_PARALLELISM;
+import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.CATALOG_PATH;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.CDC_CHANGE_COLUMN;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.CDC_CHANGE_COLUMN_DEFAULT;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.COMPUTE_COLUMN_JSON;
