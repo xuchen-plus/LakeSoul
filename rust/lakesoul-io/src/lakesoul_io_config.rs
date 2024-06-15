@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::anyhow;
 use arrow::error::ArrowError;
 use arrow_schema::{Schema, SchemaRef};
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -9,14 +14,18 @@ pub use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::{QueryPlanner, SessionState};
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::logical_expr::Expr;
+use datafusion::optimizer::analyzer::type_coercion::TypeCoercion;
+use datafusion::optimizer::push_down_filter::PushDownFilter;
+use datafusion::optimizer::push_down_projection::PushDownProjection;
+use datafusion::optimizer::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
+use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
+use datafusion::optimizer::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::DataFusionError::{External, ObjectStore};
+use datafusion_substrait::substrait::proto::Plan;
 use derivative::Derivative;
 use object_store::aws::AmazonS3Builder;
 use object_store::{ClientOptions, RetryConfig};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
 use url::{ParseError, Url};
 
 #[cfg(feature = "hdfs")]
@@ -35,15 +44,16 @@ impl Default for IOSchema {
 #[derive(Debug, Derivative)]
 #[derivative(Default, Clone)]
 pub struct LakeSoulIOConfig {
-    // root dir path of files
+    // unescaped root dir path of files
     pub(crate) prefix: String,
-    // files to read or write
+    // unescaped file paths to read or write
     pub(crate) files: Vec<String>,
     // primary key column names
     pub(crate) primary_keys: Vec<String>,
     // range partitions column names
     pub(crate) range_partitions: Vec<String>,
     // number of hash bucket
+    #[derivative(Default(value = "1"))]
     pub(crate) hash_bucket_num: usize,
     // selecting columns
     pub(crate) columns: Vec<String>,
@@ -53,6 +63,7 @@ pub struct LakeSoulIOConfig {
     // filtering predicates
     pub(crate) filter_strs: Vec<String>,
     pub(crate) filters: Vec<Expr>,
+    pub(crate) filter_protos: Vec<Plan>,
     // read or write batch size
     #[derivative(Default(value = "8192"))]
     pub(crate) batch_size: usize,
@@ -65,7 +76,10 @@ pub struct LakeSoulIOConfig {
     pub(crate) parquet_filter_pushdown: bool,
 
     // arrow schema
-    pub(crate) schema: IOSchema,
+    pub(crate) target_schema: IOSchema,
+
+    // arrow schema of partition columns
+    pub(crate) partition_schema: IOSchema,
 
     // object store related configs
     pub(crate) object_store_options: HashMap<String, String>,
@@ -82,15 +96,27 @@ pub struct LakeSoulIOConfig {
 
     // to be compatible with hadoop's fs.defaultFS
     pub(crate) default_fs: String,
+
+    // if dynamic partition
+    #[derivative(Default(value = "false"))]
+    pub(crate) use_dynamic_partition: bool,
 }
 
 impl LakeSoulIOConfig {
-    pub fn schema(&self) -> SchemaRef {
-        self.schema.0.clone()
+    pub fn target_schema(&self) -> SchemaRef {
+        self.target_schema.0.clone()
+    }
+
+    pub fn partition_schema(&self) -> SchemaRef {
+        self.partition_schema.0.clone()
     }
 
     pub fn primary_keys_slice(&self) -> &[String] {
         &self.primary_keys
+    }
+
+    pub fn range_partitions_slice(&self) -> &[String] {
+        &self.range_partitions
     }
 
     pub fn files_slice(&self) -> &[String] {
@@ -140,6 +166,11 @@ impl LakeSoulIOConfigBuilder {
         self
     }
 
+    pub fn with_range_partition(mut self, range_partition: String) -> Self {
+        self.config.range_partitions.push(range_partition);
+        self
+    }
+
     pub fn with_range_partitions(mut self, range_partitions: Vec<String>) -> Self {
         self.config.range_partitions = range_partitions;
         self
@@ -186,12 +217,22 @@ impl LakeSoulIOConfigBuilder {
     }
 
     pub fn with_schema(mut self, schema: SchemaRef) -> Self {
-        self.config.schema = IOSchema(schema);
+        self.config.target_schema = IOSchema(schema);
+        self
+    }
+
+    pub fn with_partition_schema(mut self, schema: SchemaRef) -> Self {
+        self.config.partition_schema = IOSchema(schema);
         self
     }
 
     pub fn with_filter_str(mut self, filter_str: String) -> Self {
         self.config.filter_strs.push(filter_str);
+        self
+    }
+
+    pub fn with_filter_proto(mut self, filter_proto: Plan) -> Self {
+        self.config.filter_protos.push(filter_proto);
         self
     }
 
@@ -220,12 +261,17 @@ impl LakeSoulIOConfigBuilder {
         self
     }
 
+    pub fn set_dynamic_partition(mut self, enable: bool) -> Self {
+        self.config.use_dynamic_partition = enable;
+        self
+    }
+
     pub fn build(self) -> LakeSoulIOConfig {
         self.config
     }
 
     pub fn schema(&self) -> SchemaRef {
-        self.config.schema()
+        self.config.target_schema()
     }
 
     pub fn primary_keys_slice(&self) -> &[String] {
@@ -234,6 +280,10 @@ impl LakeSoulIOConfigBuilder {
 
     pub fn aux_sort_cols_slice(&self) -> &[String] {
         self.config.aux_sort_cols_slice()
+    }
+
+    pub fn prefix(&self) -> &String {
+        &self.config.prefix
     }
 }
 
@@ -275,14 +325,13 @@ pub fn register_s3_object_store(url: &Url, config: &LakeSoulIOConfig, runtime: &
                     .set_host(Some(&*format!(
                         "{}.{}",
                         bucket,
-                        endpoint_url.host_str().expect("endpoint should contains host")
+                        endpoint_url
+                            .host_str()
+                            .ok_or(External(anyhow!("endpoint host missing").into()))?
                     )))
                     .map_err(|e| External(Box::new(e)))?;
                 let endpoint_s = endpoint_url.to_string();
-                endpoint = endpoint_s
-                    .strip_suffix('/')
-                    .map(|s| s.to_string())
-                    .or(Some(endpoint_s));
+                endpoint = endpoint_s.strip_suffix('/').map(|s| s.to_string()).or(Some(endpoint_s));
             }
         }
     }
@@ -352,9 +401,12 @@ fn register_object_store(path: &str, config: &mut LakeSoulIOConfig, runtime: &Ru
                     return Ok(path.to_owned());
                 }
                 if !config.object_store_options.contains_key("fs.s3a.bucket") {
-                    config
-                        .object_store_options
-                        .insert("fs.s3a.bucket".to_string(), url.host_str().unwrap().to_string());
+                    config.object_store_options.insert(
+                        "fs.s3a.bucket".to_string(),
+                        url.host_str()
+                            .ok_or(DataFusionError::Internal("host str missing".to_string()))?
+                            .to_string(),
+                    );
                 }
                 register_s3_object_store(&url, config, runtime)?;
                 Ok(path.to_owned())
@@ -414,12 +466,15 @@ pub fn create_session_context_with_planner(
     let mut sess_conf = SessionConfig::default()
         .with_batch_size(config.batch_size)
         .with_parquet_pruning(true)
-        .with_prefetch(config.prefetch_size);
+        .with_prefetch(config.prefetch_size)
+        .with_information_schema(true)
+        .with_create_default_catalog_and_schema(true);
 
     sess_conf.options_mut().optimizer.enable_round_robin_repartition = false; // if true, the record_batches poll from stream become unordered
     sess_conf.options_mut().optimizer.prefer_hash_join = false; //if true, panicked at 'range end out of bounds'
     sess_conf.options_mut().execution.parquet.pushdown_filters = config.parquet_filter_pushdown;
     sess_conf.options_mut().execution.target_partitions = 1;
+    // sess_conf.options_mut().catalog.default_catalog = "lakesoul".into();
 
     let runtime = RuntimeEnv::new(RuntimeConfig::new())?;
 
@@ -434,6 +489,12 @@ pub fn create_session_context_with_planner(
         register_object_store(&fs, config, &runtime)?;
     };
 
+    if !config.prefix.is_empty() {
+        let prefix = config.prefix.clone();
+        let normalized_prefix = register_object_store(&prefix, config, &runtime)?;
+        config.prefix = normalized_prefix;
+    }
+
     // register object store(s) for input/output files' path
     // and replace file names with default fs concatenated if exist
     let files = config.files.clone();
@@ -444,11 +505,34 @@ pub fn create_session_context_with_planner(
     config.files = normalized_filenames;
 
     // create session context
-    let state = if let Some(planner) = planner {
+    let mut state = if let Some(planner) = planner {
         SessionState::new_with_config_rt(sess_conf, Arc::new(runtime)).with_query_planner(planner)
     } else {
         SessionState::new_with_config_rt(sess_conf, Arc::new(runtime))
     };
+    // only keep projection/filter rules as others are unnecessary
+    let physical_opt_rules = state
+        .physical_optimizers()
+        .iter()
+        .filter_map(|r| {
+            // this rule is private mod in datafusion, so we use name to filter out it
+            if r.name() == "ProjectionPushdown" {
+                Some(r.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    state = state
+        .with_analyzer_rules(vec![Arc::new(TypeCoercion {})])
+        .with_optimizer_rules(vec![
+            Arc::new(PushDownFilter {}),
+            Arc::new(PushDownProjection {}),
+            Arc::new(SimplifyExpressions {}),
+            Arc::new(UnwrapCastInComparison {}),
+            Arc::new(RewriteDisjunctivePredicate {}),
+        ])
+        .with_physical_optimizer_rules(physical_opt_rules);
 
     Ok(SessionContext::new_with_state(state))
 }

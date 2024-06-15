@@ -4,9 +4,7 @@
 
 package com.dmetasoul.lakesoul.lakesoul.io.jnr;
 
-import jnr.ffi.Memory;
 import jnr.ffi.Pointer;
-import jnr.ffi.Runtime;
 import jnr.ffi.annotations.Delegate;
 import jnr.ffi.annotations.LongLong;
 import jnr.ffi.annotations.Out;
@@ -16,15 +14,19 @@ public interface LibLakeSoulIO {
 
     Pointer new_tokio_runtime_builder();
 
-    Pointer tokio_runtime_builder_set_thread_num(Pointer builder, int thread_num);
-
     Pointer create_tokio_runtime_from_builder(Pointer builder);
 
     Pointer new_lakesoul_io_config_builder();
 
     Pointer lakesoul_config_builder_add_single_file(Pointer builder, String file);
 
+    Pointer lakesoul_config_builder_with_prefix(Pointer builder, String file);
+
+    Pointer lakesoul_config_builder_set_hash_bucket_num(Pointer builder, int hash_bucket_num);
+
     Pointer lakesoul_config_builder_add_single_primary_key(Pointer builder, String pk);
+
+    Pointer lakesoul_config_builder_add_single_range_partition(Pointer builder, String col);
 
     Pointer lakesoul_config_builder_add_single_column(Pointer builder, String column);
 
@@ -32,13 +34,19 @@ public interface LibLakeSoulIO {
 
     Pointer lakesoul_config_builder_add_filter(Pointer builder, String filter);
 
+    Pointer lakesoul_config_builder_add_filter_proto(Pointer builder, @LongLong long proto_addr, int len);
+
     Pointer lakesoul_config_builder_add_merge_op(Pointer builder, String field, String mergeOp);
 
     Pointer lakesoul_config_builder_set_schema(Pointer builder, @LongLong long schemaAddr);
 
+    Pointer lakesoul_config_builder_set_partition_schema(Pointer builder, @LongLong long schemaAddr);
+
     Pointer lakesoul_config_builder_set_object_store_option(Pointer builder, String key, String value);
 
     Pointer lakesoul_config_builder_set_thread_num(Pointer builder, int thread_num);
+
+    Pointer lakesoul_config_builder_set_dynamic_partition(Pointer builder, boolean enable);
 
     Pointer lakesoul_config_builder_set_batch_size(Pointer builder, int batch_size);
 
@@ -80,11 +88,22 @@ public interface LibLakeSoulIO {
 
     String write_record_batch_blocked(Pointer writer, @LongLong long schemaAddr, @LongLong long arrayAddr);
 
+    String write_record_batch_ipc_blocked(Pointer writer, @LongLong long schemaAddr, @LongLong long arrayAddr);
+
     void free_lakesoul_reader(Pointer reader);
 
-    void flush_and_close_writer(Pointer writer, BooleanCallback callback);
+    Pointer flush_and_close_writer(Pointer writer, IntegerCallback callback);
 
     void abort_and_close_writer(Pointer writer, BooleanCallback callback);
 
     void free_tokio_runtime(Pointer runtime);
+
+    Pointer apply_partition_filter(IntegerCallback callback, int pbLen, long jniWrapperAddr, long schemaAddr, int filterLen, long filterAddr);
+
+    void export_bytes_result(BooleanCallback booleanCallback, Pointer bytes, Integer len, @LongLong long addr);
+
+    void free_bytes_result(Pointer bytes);
+
+    void rust_logger_init();
+
 }

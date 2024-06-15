@@ -56,12 +56,11 @@ public class ReadWithTableAPI extends AbstractTestBase {
     public void testLakesoulSourceSelectMultiRangeAndHash2() throws ExecutionException, InterruptedException {
         TableEnvironment createTableEnv = TestUtils.createTableEnv(BATCH_TYPE);
         TestUtils.createLakeSoulSourceMultiPartitionTable2(createTableEnv);
-
         Table userInfo = createTableEnv.from("user_multi2");
         Table filter = userInfo.filter($("region").isEqual("UK")).filter($("score").isGreater(80))
                 .select($("name"), $("score"), $("time"), $("region"));
         List<Row> results = CollectionUtil.iteratorToList(filter.execute().collect());
-        TestUtils.checkEqualInAnyOrder(results, new String[]{"+I[Amy, 95, 1990-10-10T10:10:01, UK]"});
+        TestUtils.checkEqualInAnyOrder(results, new String[]{"+I[Amy, 95, 1990-10-10T10:10:10.100, UK]"});
     }
 
     @Test

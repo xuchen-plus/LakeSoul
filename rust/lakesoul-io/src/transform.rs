@@ -12,12 +12,14 @@ use arrow_array::{
     new_null_array, types::*, ArrayRef, BooleanArray, PrimitiveArray, RecordBatchOptions, StringArray, StructArray,
 };
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaBuilder, SchemaRef, TimeUnit};
-use chrono::Duration;
 use datafusion::error::Result;
 use datafusion_common::DataFusionError::{ArrowError, External, Internal};
 
-use crate::constant::{ARROW_CAST_OPTIONS, DATE32_FORMAT, LAKESOUL_EMPTY_STRING, LAKESOUL_NULL_STRING, TIMESTAMP_MICROSECOND_FORMAT, TIMESTAMP_MILLSECOND_FORMAT, TIMESTAMP_NANOSECOND_FORMAT, TIMESTAMP_SECOND_FORMAT};
-pub static FLINK_TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.9f";
+use crate::constant::{
+    ARROW_CAST_OPTIONS, FLINK_TIMESTAMP_FORMAT, LAKESOUL_EMPTY_STRING, LAKESOUL_NULL_STRING,
+    TIMESTAMP_MICROSECOND_FORMAT, TIMESTAMP_MILLSECOND_FORMAT, TIMESTAMP_NANOSECOND_FORMAT, TIMESTAMP_SECOND_FORMAT,
+};
+use crate::helpers::{date_str_to_epoch_days, timestamp_str_to_unix_time};
 
 /// adjust time zone to UTC
 pub fn uniform_field(orig_field: &FieldRef) -> FieldRef {
@@ -119,7 +121,7 @@ pub fn transform_record_batch(
         transform_arrays,
         &RecordBatchOptions::new().with_row_count(Some(num_rows)),
     )
-        .map_err(ArrowError)
+    .map_err(ArrowError)
 }
 
 pub fn transform_array(
@@ -229,10 +231,8 @@ pub fn make_default_array(datatype: &DataType, value: &String, num_rows: usize) 
             // first try parsing epoch day int32 (for spark)
             if let Ok(epoch_days) = value.as_str().parse::<i32>() {
                 epoch_days
-
-
             } else {
-                // then try parsing string timestamp to epoch seconds (for flink)
+            // then try parsing string timestamp to epoch seconds (for flink)
                 date_str_to_epoch_days(value.as_str())?
             };
             num_rows
@@ -250,7 +250,7 @@ pub fn make_default_array(datatype: &DataType, value: &String, num_rows: usize) 
                         };
                         num_rows
                     ])
-                        .with_timezone_opt(timezone.clone()),
+                    .with_timezone_opt(timezone.clone()),
                 ),
                 TimeUnit::Millisecond => Arc::new(
                     PrimitiveArray::<TimestampMillisecondType>::from(vec![
@@ -264,7 +264,7 @@ pub fn make_default_array(datatype: &DataType, value: &String, num_rows: usize) 
                         };
                         num_rows
                     ])
-                        .with_timezone_opt(timezone.clone()),
+                    .with_timezone_opt(timezone.clone()),
                 ),
                 TimeUnit::Microsecond => Arc::new(
                     PrimitiveArray::<TimestampMicrosecondType>::from(vec![
@@ -283,7 +283,7 @@ pub fn make_default_array(datatype: &DataType, value: &String, num_rows: usize) 
                         };
                         num_rows
                     ])
-                        .with_timezone_opt(timezone.clone()),
+                    .with_timezone_opt(timezone.clone()),
                 ),
                 TimeUnit::Nanosecond => Arc::new(
                     PrimitiveArray::<TimestampNanosecondType>::from(vec![
@@ -302,7 +302,7 @@ pub fn make_default_array(datatype: &DataType, value: &String, num_rows: usize) 
                         };
                         num_rows
                     ])
-                        .with_timezone_opt(timezone.clone()),
+                    .with_timezone_opt(timezone.clone()),
                 ),
             }
         }
@@ -321,25 +321,4 @@ pub fn make_default_array(datatype: &DataType, value: &String, num_rows: usize) 
             new_null_array(datatype, num_rows)
         }
     })
-}
-
-pub fn date_str_to_epoch_days(value: &str) -> Result<i32> {
-    let date = chrono::NaiveDate::parse_from_str(value, DATE32_FORMAT).map_err(|e| External(Box::new(e)))?;
-    let datetime = date
-        .and_hms_opt(12, 12, 12)
-        .ok_or(Internal("invalid h/m/s".to_string()))?;
-    let epoch_time = chrono::NaiveDateTime::from_timestamp_millis(0).ok_or(Internal(
-        "the number of milliseconds is out of range for a NaiveDateTim".to_string(),
-    ))?;
-
-    Ok(datetime.signed_duration_since(epoch_time).num_days() as i32)
-}
-
-pub fn timestamp_str_to_unix_time(value: &str, fmt: &str) -> Result<Duration> {
-    let datetime = chrono::NaiveDateTime::parse_from_str(value, fmt).map_err(|e| External(Box::new(e)))?;
-    let epoch_time = chrono::NaiveDateTime::from_timestamp_millis(0).ok_or(Internal(
-        "the number of milliseconds is out of range for a NaiveDateTim".to_string(),
-    ))?;
-
-    Ok(datetime.signed_duration_since(epoch_time))
 }

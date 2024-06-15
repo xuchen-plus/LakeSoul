@@ -9,6 +9,9 @@ import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.Path;
+import org.apache.flink.core.io.SimpleVersionedSerializer;
+import org.apache.flink.core.memory.DataInputDeserializer;
+import org.apache.flink.core.memory.DataOutputSerializer;
 import org.apache.flink.lakesoul.tool.FlinkUtil;
 import org.apache.flink.lakesoul.tool.LakeSoulSinkOptions;
 import org.apache.flink.streaming.api.functions.sink.filesystem.InProgressFileWriter;
@@ -99,12 +102,46 @@ public class NativeParquetWriter implements InProgressFileWriter<RowData, String
         return null;
     }
 
+    public static class NativePendingFileRecoverableSerializer
+            implements SimpleVersionedSerializer<PendingFileRecoverable> {
+
+        public static final NativePendingFileRecoverableSerializer INSTANCE =
+                new NativePendingFileRecoverableSerializer();
+
+        @Override
+        public int getVersion() {
+            return 0;
+        }
+
+        @Override
+        public byte[] serialize(InProgressFileWriter.PendingFileRecoverable obj) throws IOException {
+            if (!(obj instanceof NativeParquetWriter.NativeWriterPendingFileRecoverable)) {
+                throw new UnsupportedOperationException(
+                        "Only NativeParquetWriter.NativeWriterPendingFileRecoverable is supported.");
+            }
+            DataOutputSerializer out = new DataOutputSerializer(256);
+            NativeParquetWriter.NativeWriterPendingFileRecoverable recoverable =
+                    (NativeParquetWriter.NativeWriterPendingFileRecoverable) obj;
+            out.writeUTF(recoverable.path);
+            out.writeLong(recoverable.creationTime);
+            return out.getCopyOfBuffer();
+        }
+
+        @Override
+        public InProgressFileWriter.PendingFileRecoverable deserialize(int version, byte[] serialized) throws IOException {
+            DataInputDeserializer in = new DataInputDeserializer(serialized);
+            String path = in.readUTF();
+            long time = in.readLong();
+            return new NativeParquetWriter.NativeWriterPendingFileRecoverable(path, time);
+        }
+    }
+
     static public class NativeWriterPendingFileRecoverable implements PendingFileRecoverable, Serializable {
         public String path;
 
         public long creationTime;
 
-        NativeWriterPendingFileRecoverable(String path, long creationTime) {
+        public NativeWriterPendingFileRecoverable(String path, long creationTime) {
             this.path = path;
             this.creationTime = creationTime;
         }

@@ -24,7 +24,8 @@ use tokio::task::JoinHandle;
 
 use crate::datasource::file_format::LakeSoulParquetFormat;
 use crate::datasource::listing::LakeSoulListingTable;
-use crate::datasource::parquet_source::prune_filter_and_execute;
+use crate::datasource::physical_plan::merge::convert_filter;
+use crate::datasource::physical_plan::merge::prune_filter_and_execute;
 use crate::lakesoul_io_config::{create_session_context, LakeSoulIOConfig};
 
 pub struct LakeSoulReader {
@@ -46,7 +47,7 @@ impl LakeSoulReader {
     }
 
     pub async fn start(&mut self) -> Result<()> {
-        let schema: SchemaRef = self.config.schema.0.clone();
+        let target_schema: SchemaRef = self.config.target_schema.0.clone();
         if self.config.files.is_empty() {
             Err(DataFusionError::Internal(
                 "LakeSoulReader has wrong number of file".to_string(),
@@ -65,13 +66,13 @@ impl LakeSoulReader {
             .await?;
 
             let dataframe = self.sess_ctx.read_table(Arc::new(source))?;
-            let stream = prune_filter_and_execute(
-                dataframe,
-                schema.clone(),
+            let filters = convert_filter(
+                &dataframe,
                 self.config.filter_strs.clone(),
-                self.config.batch_size,
-            )
-            .await?;
+                self.config.filter_protos.clone(),
+            )?;
+            let stream =
+                prune_filter_and_execute(dataframe, target_schema.clone(), filters, self.config.batch_size).await?;
             self.schema = Some(stream.schema());
             self.stream = Some(stream);
 
@@ -338,7 +339,7 @@ mod tests {
                 Some(rb) => {
                     let num_rows = &rb.unwrap().num_rows();
                     unsafe {
-                        ROW_CNT = ROW_CNT + num_rows;
+                        ROW_CNT += num_rows;
                         println!("{}", ROW_CNT);
                     }
 
@@ -374,7 +375,7 @@ mod tests {
         let mut row_cnt: usize = 0;
 
         while let Some(rb) = reader.next_rb().await {
-            row_cnt += &rb.unwrap().num_rows();
+            row_cnt += &rb?.num_rows();
         }
 
         Ok(row_cnt)

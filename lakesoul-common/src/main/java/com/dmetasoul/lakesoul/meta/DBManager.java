@@ -169,7 +169,7 @@ public class DBManager {
         return tablePathIdDao.listAllPathByNamespace(tableNamespace);
     }
 
-    public List<TableInfo> getTableInfosByNamespace(String tableNamespace){
+    public List<TableInfo> getTableInfosByNamespace(String tableNamespace) {
         return tableInfoDao.selectByNamespace(tableNamespace);
     }
 
@@ -246,7 +246,7 @@ public class DBManager {
     }
 
     private void getSnapshotAndFilePathInfo(String tableId, String partitionDesc, List<DataFileOp> fileOps, List<String> deleteFilePathList,
-                         List<PartitionInfo> filterPartitionInfo, Set<Uuid> snapshotList) {
+                                            List<PartitionInfo> filterPartitionInfo, Set<Uuid> snapshotList) {
         filterPartitionInfo.forEach(p -> snapshotList.addAll(p.getSnapshotList()));
         List<DataCommitInfo> filterDataCommitInfo =
                 dataCommitInfoDao.selectByTableIdPartitionDescCommitList(tableId, partitionDesc, snapshotList.stream().collect(Collectors.toList()));
@@ -470,6 +470,7 @@ public class DBManager {
                 int readPartitionVersion = 0;
                 if (readPartition != null) {
                     readPartitionVersion = readPartition.getVersion();
+
                 }
 
                 int newVersion = curVersion + 1;
@@ -504,7 +505,7 @@ public class DBManager {
                     } else {
                         if (middleCommitOps.contains(CommitOp.UpdateCommit) || middleCommitOps.contains(CommitOp.CompactionCommit)) {
                             partitionDescList.remove(partitionDesc);
-                            snapshotList.removeAll(partitionInfo.getSnapshotList());
+                            snapshotList.removeAll(partitionInfo.getSnapshotList().stream().map(uuid -> DBUtil.toJavaUUID(uuid).toString()).collect(Collectors.toList()));
                             continue;
                         }
                         curPartitionInfo = updateSubmitPartitionSnapshot(partitionInfo, curPartitionInfo, readPartition);

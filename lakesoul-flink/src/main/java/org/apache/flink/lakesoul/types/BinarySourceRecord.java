@@ -17,6 +17,7 @@ import org.apache.flink.lakesoul.tool.FlinkUtil;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
+import org.apache.flink.table.data.TimestampData;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import java.util.ArrayList;
@@ -106,8 +107,12 @@ public class BinarySourceRecord {
             }
             long sortField = (binlogFileIndex << 32) + binlogPosition;
             LakeSoulRowDataWrapper data = convert.toLakeSoulDataType(valueSchema, value, tableId, tsMs, sortField);
-            String tablePath = new Path(new Path(basePath, tableId.schema()), tableId.table()).toString();
-
+            String tablePath;
+            if (tableId.schema() == null){
+                tablePath = new Path(new Path(basePath, tableId.catalog()), tableId.table()).toString();
+            }else {
+                tablePath = new Path(new Path(basePath, tableId.schema()), tableId.table()).toString();
+            }
             return new BinarySourceRecord(sourceRecord.topic(), primaryKeys, tableId, FlinkUtil.makeQualifiedPath(tablePath).toString(),
                     Collections.emptyList(), false, data, null);
         }

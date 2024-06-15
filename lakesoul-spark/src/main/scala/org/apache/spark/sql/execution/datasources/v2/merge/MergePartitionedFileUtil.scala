@@ -45,8 +45,10 @@ object MergePartitionedFileUtil {
                          requestPartitionFields: Array[String]): MergePartitionedFile = {
     val hosts = getBlockHosts(getBlockLocations(file), 0, file.getLen)
 
-    val fs = filePath.getFileSystem(sparkSession.sessionState.newHadoopConf())
-    val filePathStr = fs.makeQualified(filePath).toString
+    val fs = filePath
+      .getFileSystem(sparkSession.sessionState.newHadoopConf())
+    val filePathStr = fs
+      .makeQualified(filePath).toString
     val touchedFileInfo = fileInfo.find(f => filePathStr.equals(fs.makeQualified(new Path(f.path)).toString))
       .getOrElse(throw LakeSoulErrors.filePathNotFoundException(filePathStr, fileInfo.mkString(",")))
 

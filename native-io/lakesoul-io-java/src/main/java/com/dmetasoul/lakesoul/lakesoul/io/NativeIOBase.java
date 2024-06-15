@@ -38,6 +38,10 @@ public class NativeIOBase implements AutoCloseable {
 
     protected CDataDictionaryProvider provider;
 
+    protected Pointer fixedBuffer = null;
+
+    protected Pointer mutableBuffer = null;
+
     public static boolean isNativeIOLibExist() {
         return JnrLoader.get() != null;
     }
@@ -52,8 +56,21 @@ public class NativeIOBase implements AutoCloseable {
         intReferenceManager = Runtime.getRuntime(libLakeSoulIO).newObjectReferenceManager();
         ioConfigBuilder = libLakeSoulIO.new_lakesoul_io_config_builder();
         tokioRuntimeBuilder = libLakeSoulIO.new_tokio_runtime_builder();
+
+        fixedBuffer = Runtime.getRuntime(libLakeSoulIO).getMemoryManager().allocateDirect(5000L);
+        mutableBuffer = Runtime.getRuntime(libLakeSoulIO).getMemoryManager().allocateDirect(1 << 12);
+
         setBatchSize(10240);
         setThreadNum(2);
+        libLakeSoulIO.rust_logger_init();
+    }
+
+    public ObjectReferenceManager<IntegerCallback> getIntReferenceManager() {
+        return intReferenceManager;
+    }
+
+    public ObjectReferenceManager<BooleanCallback> getBoolReferenceManager() {
+        return boolReferenceManager;
     }
 
     public void setExternalAllocator(BufferAllocator allocator) {
@@ -62,6 +79,10 @@ public class NativeIOBase implements AutoCloseable {
 
     public void addFile(String file) {
         ioConfigBuilder = libLakeSoulIO.lakesoul_config_builder_add_single_file(ioConfigBuilder, file);
+    }
+
+    public void withPrefix(String prefix) {
+        ioConfigBuilder = libLakeSoulIO.lakesoul_config_builder_with_prefix(ioConfigBuilder, prefix);
     }
 
     public void addColumn(String column) {
@@ -75,6 +96,12 @@ public class NativeIOBase implements AutoCloseable {
         }
     }
 
+    public void setRangePartitions(Iterable<String> rangePartitions) {
+        for (String col : rangePartitions) {
+            ioConfigBuilder = libLakeSoulIO.lakesoul_config_builder_add_single_range_partition(ioConfigBuilder, col);
+        }
+    }
+
     public void setSchema(Schema schema) {
         assert ioConfigBuilder != null;
         ArrowSchema ffiSchema = ArrowSchema.allocateNew(allocator);
@@ -85,9 +112,24 @@ public class NativeIOBase implements AutoCloseable {
         ffiSchema.close();
     }
 
+    public void setPartitionSchema(Schema schema) {
+        assert ioConfigBuilder != null;
+        ArrowSchema ffiSchema = ArrowSchema.allocateNew(allocator);
+        CDataDictionaryProvider tmpProvider = new CDataDictionaryProvider();
+        Data.exportSchema(allocator, schema, tmpProvider, ffiSchema);
+        ioConfigBuilder = libLakeSoulIO.lakesoul_config_builder_set_partition_schema(ioConfigBuilder, ffiSchema.memoryAddress());
+        tmpProvider.close();
+        ffiSchema.close();
+    }
+
     public void setThreadNum(int threadNum) {
         assert ioConfigBuilder != null;
         ioConfigBuilder = libLakeSoulIO.lakesoul_config_builder_set_thread_num(ioConfigBuilder, threadNum);
+    }
+
+    public void useDynamicPartition(boolean enable) {
+        assert ioConfigBuilder != null;
+        ioConfigBuilder = libLakeSoulIO.lakesoul_config_builder_set_dynamic_partition(ioConfigBuilder, enable);
     }
 
     public void setBatchSize(int batchSize) {

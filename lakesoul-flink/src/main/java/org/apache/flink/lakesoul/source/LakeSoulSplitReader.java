@@ -4,6 +4,7 @@
 
 package org.apache.flink.lakesoul.source;
 
+import io.substrait.proto.Plan;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
@@ -11,7 +12,6 @@ import org.apache.flink.connector.base.source.reader.splitreader.SplitsAddition;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsChange;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
-import org.apache.parquet.filter2.predicate.FilterPredicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,42 +21,47 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Queue;
 
-public class LakeSoulSplitReader implements SplitReader<RowData, LakeSoulSplit> {
+public class LakeSoulSplitReader implements SplitReader<RowData, LakeSoulPartitionSplit> {
 
     private static final Logger LOG = LoggerFactory.getLogger(LakeSoulSplitReader.class);
 
     private final Configuration conf;
 
-    private final Queue<LakeSoulSplit> splits;
+    private final Queue<LakeSoulPartitionSplit> splits;
+    private final List<String> partitionColumns;
+    private final RowType tableRowType;
+    RowType projectedRowType;
 
-    RowType rowType;
-
-    RowType rowTypeWithPk;
+    RowType projectedRowTypeWithPk;
 
     List<String> pkColumns;
 
-    boolean isStreaming;
+    boolean isBounded;
 
     String cdcColumn;
 
-    FilterPredicate filter;
+    Plan filter;
 
     private LakeSoulOneSplitRecordsReader lastSplitReader;
 
     public LakeSoulSplitReader(Configuration conf,
-                               RowType rowType,
-                               RowType rowTypeWithPk,
+                               RowType tableRowType,
+                               RowType projectedRowType,
+                               RowType projectedRowTypeWithPk,
                                List<String> pkColumns,
-                               boolean isStreaming,
+                               boolean isBounded,
                                String cdcColumn,
-                               FilterPredicate filter) {
+                               List<String> partitionColumns,
+                               Plan filter) {
         this.conf = conf;
         this.splits = new ArrayDeque<>();
-        this.rowType = rowType;
-        this.rowTypeWithPk = rowTypeWithPk;
+        this.tableRowType = tableRowType;
+        this.projectedRowType = projectedRowType;
+        this.projectedRowTypeWithPk = projectedRowTypeWithPk;
         this.pkColumns = pkColumns;
-        this.isStreaming = isStreaming;
+        this.isBounded = isBounded;
         this.cdcColumn = cdcColumn;
+        this.partitionColumns = partitionColumns;
         this.filter = filter;
     }
 
@@ -67,12 +72,15 @@ public class LakeSoulSplitReader implements SplitReader<RowData, LakeSoulSplit> 
             lastSplitReader =
                     new LakeSoulOneSplitRecordsReader(this.conf,
                             Objects.requireNonNull(splits.poll()),
-                            this.rowType,
-                            this.rowTypeWithPk,
+                            this.tableRowType,
+                            this.projectedRowType,
+                            this.projectedRowTypeWithPk,
                             this.pkColumns,
-                            this.isStreaming,
+                            this.isBounded,
                             this.cdcColumn,
-                            this.filter);
+                            this.partitionColumns,
+                            this.filter
+                    );
             return lastSplitReader;
         } catch (Exception e) {
             throw new IOException(e);
@@ -80,7 +88,7 @@ public class LakeSoulSplitReader implements SplitReader<RowData, LakeSoulSplit> 
     }
 
     @Override
-    public void handleSplitsChanges(SplitsChange<LakeSoulSplit> splitChange) {
+    public void handleSplitsChanges(SplitsChange<LakeSoulPartitionSplit> splitChange) {
         if (!(splitChange instanceof SplitsAddition)) {
             throw new UnsupportedOperationException(
                     String.format("The SplitChange type of %s is not supported.",

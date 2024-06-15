@@ -49,6 +49,10 @@ struct Writer {
   uint8_t private_[0];
 };
 
+struct BytesResult {
+  uint8_t private_[0];
+};
+
 struct TokioRuntimeBuilder {
   uint8_t private_[0];
 };
@@ -56,6 +60,8 @@ struct TokioRuntimeBuilder {
 extern "C" {
 
 IOConfigBuilder *new_lakesoul_io_config_builder();
+
+IOConfigBuilder *lakesoul_config_builder_with_prefix(IOConfigBuilder *builder, const char *prefix);
 
 IOConfigBuilder *lakesoul_config_builder_add_single_file(IOConfigBuilder *builder,
                                                          const char *file);
@@ -68,11 +74,21 @@ IOConfigBuilder *lakesoul_config_builder_add_single_aux_sort_column(IOConfigBuil
 
 IOConfigBuilder *lakesoul_config_builder_add_filter(IOConfigBuilder *builder, const char *filter);
 
+IOConfigBuilder *lakesoul_config_builder_add_filter_proto(IOConfigBuilder *builder,
+                                                          c_ptrdiff_t proto_addr,
+                                                          int32_t len);
+
 IOConfigBuilder *lakesoul_config_builder_set_schema(IOConfigBuilder *builder,
                                                     c_ptrdiff_t schema_addr);
 
+IOConfigBuilder *lakesoul_config_builder_set_partition_schema(IOConfigBuilder *builder,
+                                                              c_ptrdiff_t schema_addr);
+
 IOConfigBuilder *lakesoul_config_builder_set_thread_num(IOConfigBuilder *builder,
                                                         c_size_t thread_num);
+
+IOConfigBuilder *lakesoul_config_builder_set_dynamic_partition(IOConfigBuilder *builder,
+                                                               bool enable);
 
 IOConfigBuilder *lakesoul_config_builder_set_batch_size(IOConfigBuilder *builder,
                                                         c_size_t batch_size);
@@ -82,6 +98,9 @@ IOConfigBuilder *lakesoul_config_builder_set_max_row_group_size(IOConfigBuilder 
 
 IOConfigBuilder *lakesoul_config_builder_set_buffer_size(IOConfigBuilder *builder,
                                                          c_size_t buffer_size);
+
+IOConfigBuilder *lakesoul_config_builder_set_hash_bucket_num(IOConfigBuilder *builder,
+                                                             c_size_t hash_bucket_num);
 
 IOConfigBuilder *lakesoul_config_builder_set_object_store_option(IOConfigBuilder *builder,
                                                                  const char *key,
@@ -93,6 +112,9 @@ IOConfigBuilder *lakesoul_config_builder_add_files(IOConfigBuilder *builder,
 
 IOConfigBuilder *lakesoul_config_builder_add_single_primary_key(IOConfigBuilder *builder,
                                                                 const char *pk);
+
+IOConfigBuilder *lakesoul_config_builder_add_single_range_partition(IOConfigBuilder *builder,
+                                                                    const char *col);
 
 IOConfigBuilder *lakesoul_config_builder_add_merge_op(IOConfigBuilder *builder,
                                                       const char *field,
@@ -146,7 +168,12 @@ const char *write_record_batch_blocked(CResult<Writer> *writer,
                                        c_ptrdiff_t schema_addr,
                                        c_ptrdiff_t array_addr);
 
-void flush_and_close_writer(CResult<Writer> *writer, ResultCallback callback);
+void export_bytes_result(void (*callback)(bool, const char*),
+                         CResult<BytesResult> *bytes,
+                         int32_t len,
+                         c_ptrdiff_t addr);
+
+CResult<BytesResult> *flush_and_close_writer(CResult<Writer> *writer, I32ResultCallback callback);
 
 void abort_and_close_writer(CResult<Writer> *writer, ResultCallback callback);
 
@@ -158,6 +185,17 @@ TokioRuntimeBuilder *tokio_runtime_builder_set_thread_num(TokioRuntimeBuilder *b
 TokioRuntime *create_tokio_runtime_from_builder(TokioRuntimeBuilder *builder);
 
 void free_tokio_runtime(CResult<TokioRuntime> *runtime);
+
+CResult<BytesResult> *apply_partition_filter(void (*callback)(int32_t, const char*),
+                                             int32_t len,
+                                             c_ptrdiff_t jni_wrapper_addr,
+                                             FFI_ArrowSchema *schema_addr,
+                                             int32_t filter_len,
+                                             c_ptrdiff_t filter_addr);
+
+void free_bytes_result(CResult<BytesResult> *bytes);
+
+void rust_logger_init();
 
 } // extern "C"
 

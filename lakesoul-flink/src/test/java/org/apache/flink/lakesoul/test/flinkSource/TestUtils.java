@@ -8,6 +8,7 @@ import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.lakesoul.metadata.LakeSoulCatalog;
 import org.apache.flink.lakesoul.test.AbstractTestBase;
+import org.apache.flink.lakesoul.tool.FlinkUtil;
 import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.environment.CheckpointConfig;
 import org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions;
@@ -26,6 +27,7 @@ import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 
+import static org.apache.flink.lakesoul.test.AbstractTestBase.fsConfig;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestUtils {
@@ -36,9 +38,11 @@ public class TestUtils {
     public static TableEnvironment createTableEnv(String mode) {
         TableEnvironment createTableEnv;
         if (mode.equals(BATCH_TYPE)) {
-            createTableEnv = TableEnvironment.create(EnvironmentSettings.inBatchMode());
+            createTableEnv = TableEnvironment.create(
+                    EnvironmentSettings.newInstance().withConfiguration(fsConfig).inBatchMode().build()
+            );
         } else {
-            Configuration config = new Configuration();
+            Configuration config = new Configuration(fsConfig);
             config.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
             StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(config);
             env.setRuntimeMode(RuntimeExecutionMode.STREAMING);
@@ -69,6 +73,7 @@ public class TestUtils {
             env.setRuntimeMode(RuntimeExecutionMode.BATCH);
         }
         tEnvs = StreamTableEnvironment.create(env);
+        FlinkUtil.setS3Options(tEnvs.getConfig().getConfiguration(), fsConfig);
         Catalog lakesoulCatalog = new LakeSoulCatalog();
         tEnvs.registerCatalog("lakeSoul", lakesoulCatalog);
         tEnvs.useCatalog("lakeSoul");
@@ -129,6 +134,7 @@ public class TestUtils {
         tEnvs.executeSql("DROP view if exists user_info_view");
         tEnvs.executeSql(createViewSql);
     }
+
     public static void createLakeSoulSourceMultiPartitionTable(TableEnvironment tEnvs)
             throws ExecutionException, InterruptedException {
         String createSql = "create table user_multi (" + "    `id` INT," + "    name STRING," + "    score INT," +
@@ -160,12 +166,12 @@ public class TestUtils {
         tEnvs.executeSql(createSql);
         tEnvs.executeSql(
                         "INSERT INTO user_multi2 VALUES" +
-                                "(1, 'Bob', 90, TO_TIMESTAMP('1990-10-01 10:10:00'), 'China')," +
-                                "(2, 'Alice', 80, TO_TIMESTAMP('1990-10-10 10:10:00'), 'China'), " +
-                                "(3, 'Jack', 75,  TO_TIMESTAMP('1990-10-15 10:10:00'), 'China')," +
-                                "(3, 'Amy', 95,  TO_TIMESTAMP('1990-10-10 10:10:01'),'UK'), " +
-                                "(5, 'Tom', 75,  TO_TIMESTAMP('1990-10-01 10:10:00'), 'UK')," +
-                                "(4, 'Mike', 70, TO_TIMESTAMP('1990-10-15 10:10:00'), 'UK')")
+                                "(1, 'Bob', 90, TO_TIMESTAMP('1990-10-01 10:10:10.100101'), 'China')," +
+                                "(2, 'Alice', 80, TO_TIMESTAMP('1990-10-10 10:10:10.100101'), 'China'), " +
+                                "(3, 'Jack', 75,  TO_TIMESTAMP('1990-10-15 10:10:10.100101'), 'China')," +
+                                "(3, 'Amy', 95,  TO_TIMESTAMP('1990-10-10 10:10:10.100101'),'UK'), " +
+                                "(5, 'Tom', 75,  TO_TIMESTAMP('1990-10-01 10:10:10.100101'), 'UK')," +
+                                "(4, 'Mike', 70, TO_TIMESTAMP('1990-10-15 10:10:10.100101'), 'UK')")
                 .await();
     }
 

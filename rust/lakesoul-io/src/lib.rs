@@ -4,6 +4,7 @@
 
 pub mod datasource;
 pub mod filter;
+pub mod hash_utils;
 pub mod helpers;
 pub mod lakesoul_io_config;
 pub mod lakesoul_reader;
@@ -11,12 +12,11 @@ pub mod lakesoul_writer;
 mod projection;
 pub mod repartition;
 pub mod sorted_merge;
-pub mod hash_utils;
 
 #[cfg(feature = "hdfs")]
 mod hdfs;
 
-mod constant;
+pub mod constant;
 mod default_column_stream;
 mod transform;
 

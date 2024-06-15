@@ -294,20 +294,20 @@ impl From<&ArrowJavaField> for Field {
                 field.children.iter().map(|f| f.into()).collect::<Vec<Field>>(),
             )),
             ArrowJavaType::List => {
-                assert!(field.children.len() == 1);
+                assert_eq!(field.children.len(), 1);
                 DataType::List(Arc::new(field.children.first().unwrap().into()))
             }
             ArrowJavaType::LargeList => {
-                assert!(field.children.len() == 1);
+                assert_eq!(field.children.len(), 1);
                 DataType::LargeList(Arc::new(field.children.first().unwrap().into()))
             }
             ArrowJavaType::FixedSizeList { list_size } => {
-                assert!(field.children.len() == 1);
+                assert_eq!(field.children.len(), 1);
                 DataType::FixedSizeList(Arc::new(field.children.first().unwrap().into()), *list_size)
             }
             ArrowJavaType::Union => todo!("Union type not supported"),
             ArrowJavaType::Map { keys_sorted } => {
-                assert!(field.children.len() == 1);
+                assert_eq!(field.children.len(), 1);
                 DataType::Map(Arc::new(field.children.first().unwrap().into()), *keys_sorted)
             }
             ArrowJavaType::Int { is_signed, bit_width } => {
@@ -349,10 +349,10 @@ impl From<&ArrowJavaField> for Field {
             ArrowJavaType::Decimal {
                 precision,
                 scale,
-                bit_width,
+                bit_width: _,
             } => DataType::Decimal128(*precision, *scale),
             ArrowJavaType::Date { unit } if unit == "DAY" => DataType::Date32,
-            ArrowJavaType::Date { unit } => DataType::Date64,
+            ArrowJavaType::Date { unit: _ } => DataType::Date64,
             ArrowJavaType::Time { bit_width, unit } => {
                 let time_unit = match unit.as_str() {
                     "SECOND" => TimeUnit::Second,

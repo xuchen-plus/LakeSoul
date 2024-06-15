@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.dmetasoul.lakesoul.meta.jnr;
 
+import com.alibaba.fastjson.JSON;
 import com.dmetasoul.lakesoul.meta.DBUtil;
 import com.dmetasoul.lakesoul.meta.DataBaseProperty;
 import com.dmetasoul.lakesoul.meta.entity.JniWrapper;
@@ -91,6 +92,7 @@ public class NativeMetadataJavaClient implements AutoCloseable {
     public static void shutDownInstance() {
         instance = null;
     }
+
 
     public Pointer getTokioPostgresClient() {
         return tokioPostgresClient;
@@ -190,6 +192,7 @@ public class NativeMetadataJavaClient implements AutoCloseable {
     }
 
     private void initialize() {
+        libLakeSoulMetaData.rust_logger_init();
         DataBaseProperty dataBaseProperty = NativeMetadataJavaClient.dataBaseProperty;
         if (dataBaseProperty == null) {
             dataBaseProperty = DBUtil.getDBInfo();
@@ -206,7 +209,7 @@ public class NativeMetadataJavaClient implements AutoCloseable {
         final CompletableFuture<Boolean> future = new CompletableFuture<>();
         tokioPostgresClient = libLakeSoulMetaData.create_tokio_postgres_client(
                 new ReferencedBooleanCallback((bool, msg) -> {
-                    if (msg.isEmpty()) {
+                    if (msg == null || msg.isEmpty()) {
                         future.complete(bool);
                     } else {
                         System.err.println(msg);
@@ -237,7 +240,7 @@ public class NativeMetadataJavaClient implements AutoCloseable {
                     final CompletableFuture<Integer> queryFuture = new CompletableFuture<>();
                     Pointer queryResult = getLibLakeSoulMetaData().execute_query(
                             new ReferencedIntegerCallback((result, msg) -> {
-                                if (msg.isEmpty()) {
+                                if (msg == null || msg.isEmpty()) {
                                     queryFuture.complete(result);
                                 } else {
                                     queryFuture.completeExceptionally(new SQLException(msg));
@@ -263,7 +266,7 @@ public class NativeMetadataJavaClient implements AutoCloseable {
                     final CompletableFuture<Boolean> importFuture = new CompletableFuture<>();
                     getLibLakeSoulMetaData().export_bytes_result(
                             new ReferencedBooleanCallback((result, msg) -> {
-                                if (msg.isEmpty()) {
+                                if (msg == null || msg.isEmpty()) {
                                     importFuture.complete(result);
                                 } else {
                                     importFuture.completeExceptionally(new SQLException(msg));
@@ -350,7 +353,7 @@ public class NativeMetadataJavaClient implements AutoCloseable {
 
                     getLibLakeSoulMetaData().execute_insert(
                             new ReferencedIntegerCallback((result, msg) -> {
-                                if (msg.isEmpty()) {
+                                if (msg == null || msg.isEmpty()) {
                                     future.complete(result);
                                 } else {
                                     future.completeExceptionally(new SQLException(msg));
@@ -398,7 +401,7 @@ public class NativeMetadataJavaClient implements AutoCloseable {
 
                     getLibLakeSoulMetaData().execute_update(
                             new ReferencedIntegerCallback((result, msg) -> {
-                                if (msg.isEmpty()) {
+                                if (msg == null || msg.isEmpty()) {
                                     future.complete(result);
                                 } else {
                                     future.completeExceptionally(new SQLException(msg));
@@ -445,7 +448,7 @@ public class NativeMetadataJavaClient implements AutoCloseable {
 
                     getLibLakeSoulMetaData().execute_query_scalar(
                             new ReferencedStringCallback((result, msg) -> {
-                                if (msg.isEmpty()) {
+                                if (msg == null || msg.isEmpty()) {
                                     future.complete(result);
                                 } else {
                                     future.completeExceptionally(new SQLException(msg));
@@ -517,7 +520,7 @@ public class NativeMetadataJavaClient implements AutoCloseable {
         try {
             instance.getLibLakeSoulMetaData().clean_meta_for_test(
                     new ReferencedIntegerCallback((result, msg) -> {
-                        if (msg.isEmpty()) {
+                        if (msg == null || msg.isEmpty()) {
                             future.complete(result);
                         } else {
                             future.completeExceptionally(new SQLException(msg));
@@ -557,6 +560,52 @@ public class NativeMetadataJavaClient implements AutoCloseable {
         if (instance != null) {
             instance.close();
             instance = null;
+        }
+    }
+
+
+    /**
+     * if ffi function failed with -100
+     * should recreate pg client and prepared map
+     *
+     * @param tableName name
+     * @param namespace the np of TableInfo
+     * @return split(partition) desc array in json format by table_name, namespace , filter(WIP)
+     */
+    public List<SplitDesc> createSplitDescArray(String tableName, String namespace) {
+        getReadLock();
+        final CompletableFuture<Boolean> future = new CompletableFuture<>();
+        Pointer ptr = getLibLakeSoulMetaData()
+                .create_split_desc_array(
+                        new ReferencedBooleanCallback((result, msg) -> {
+                            if (msg != null) {
+                                System.err.println(msg);
+                            }
+                            future.complete(result);
+                        }, getbooleanCallbackObjectReferenceManager()),
+                        tokioPostgresClient,
+                        preparedStatement,
+                        tokioRuntime,
+                        tableName,
+                        namespace);
+        try {
+            Boolean ans = future.get(timeout, TimeUnit.MILLISECONDS);
+            if (ans) {
+                //  This copies a zero (nul) terminated by array from native memory.
+                String json = ptr.getString(0);
+                List<SplitDesc> list = JSON.parseArray(json, SplitDesc.class);
+                getLibLakeSoulMetaData().free_split_desc_array(ptr);
+                return list;
+            }
+            // other errors
+            throw new RuntimeException("create split desc array failed");
+        } catch (InterruptedException | ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (TimeoutException e) {
+            LOG.error("create split desc array timeout");
+            throw new RuntimeException(e);
+        } finally {
+            unlockReadLock();
         }
     }
 }

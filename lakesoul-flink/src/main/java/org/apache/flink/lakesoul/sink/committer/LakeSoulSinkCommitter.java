@@ -47,24 +47,20 @@ public class LakeSoulSinkCommitter implements Committer<LakeSoulMultiTableSinkCo
     @Override
     public List<LakeSoulMultiTableSinkCommittable> commit(List<LakeSoulMultiTableSinkCommittable> committables)
             throws IOException {
-        LOG.info("Found {} committables for LakeSoul to commit", committables.size());
+        LOG.info("Found {} committable for LakeSoul to commit", committables.size());
         // commit by file creation time in ascending order
         committables.sort(LakeSoulMultiTableSinkCommittable::compareTo);
 
         DBManager lakeSoulDBManager = new DBManager();
         for (LakeSoulMultiTableSinkCommittable committable : committables) {
-            LOG.info("Commtting {}", committable);
-            if (committable.hasPendingFile()) {
-                assert committable.getPendingFiles() != null;
-                LOG.info("PendingFiles to commit {}", committable.getPendingFiles().size());
-                if (committable.getPendingFiles().isEmpty()) {
-                    continue;
-                }
+            LOG.info("Committing {}", committable);
+            for (Map.Entry<String, List<InProgressFileWriter.PendingFileRecoverable>> entry : committable.getPendingFilesMap().entrySet()) {
+                List<InProgressFileWriter.PendingFileRecoverable> pendingFiles = entry.getValue();
 
                 // pending files to commit
                 List<String> files = new ArrayList<>();
                 for (InProgressFileWriter.PendingFileRecoverable pendingFileRecoverable :
-                        committable.getPendingFiles()) {
+                        pendingFiles) {
                     if (pendingFileRecoverable instanceof NativeParquetWriter.NativeWriterPendingFileRecoverable) {
                         NativeParquetWriter.NativeWriterPendingFileRecoverable recoverable =
                                 (NativeParquetWriter.NativeWriterPendingFileRecoverable) pendingFileRecoverable;
@@ -74,7 +70,9 @@ public class LakeSoulSinkCommitter implements Committer<LakeSoulMultiTableSinkCo
 
                 LOG.info("Files to commit {}", String.join("; ", files));
 
-                if (files.isEmpty()) continue;
+                if (files.isEmpty() && !LakeSoulSinkOptions.DELETE.equals(committable.getDmlType())) {
+                    continue;
+                }
 
                 // commit LakeSoul Meta
                 TableSchemaIdentity identity = committable.getIdentity();
@@ -92,11 +90,15 @@ public class LakeSoulSinkCommitter implements Committer<LakeSoulMultiTableSinkCo
                     dataFileOp.setFileExistCols(fileExistCols);
                     dataFileOpList.add(dataFileOp.build());
                 }
-                String partition = committable.getBucketId();
+                String partition = entry.getKey();
                 List<PartitionInfo> readPartitionInfoList = null;
+
 
                 TableNameId tableNameId =
                         lakeSoulDBManager.shortTableName(identity.tableId.table(), identity.tableId.schema());
+                if (identity.tableId.schema() == null) {
+                    tableNameId = lakeSoulDBManager.shortTableName(identity.tableId.table(), identity.tableId.catalog());
+                }
 
                 DataCommitInfo.Builder dataCommitInfo = DataCommitInfo.newBuilder();
                 dataCommitInfo.setTableId(tableNameId.getTableId());
@@ -115,12 +117,8 @@ public class LakeSoulSinkCommitter implements Committer<LakeSoulMultiTableSinkCo
                     dataCommitInfo.setCommitOp(CommitOp.UpdateCommit);
                 } else if (LakeSoulSinkOptions.PARTITION_DELETE.equals(committable.getDmlType())) {
                     dataCommitInfo.setCommitOp(CommitOp.DeleteCommit);
-                } else if (LakeSoulSinkOptions.UPDATE.equals(committable.getDmlType())) {
-                    if (!identity.primaryKeys.isEmpty()) {
-                        dataCommitInfo.setCommitOp(CommitOp.AppendCommit);
-                    } else {
-                        dataCommitInfo.setCommitOp(CommitOp.UpdateCommit);
-                    }
+                } else if (LakeSoulSinkOptions.UPDATE.equals(committable.getDmlType()) && identity.primaryKeys.isEmpty()) {
+                    dataCommitInfo.setCommitOp(CommitOp.UpdateCommit);
                 } else {
                     dataCommitInfo.setCommitOp(CommitOp.AppendCommit);
                 }
@@ -140,6 +138,7 @@ public class LakeSoulSinkCommitter implements Committer<LakeSoulMultiTableSinkCo
 
                 lakeSoulDBManager.commitDataCommitInfo(dataCommitInfo.build(), readPartitionInfoList);
             }
+            LOG.info("Committing done, committable={} ", committable);
         }
 
         return Collections.emptyList();

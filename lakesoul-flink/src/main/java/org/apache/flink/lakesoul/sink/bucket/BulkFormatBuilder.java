@@ -12,10 +12,7 @@ import org.apache.flink.lakesoul.sink.LakeSoulMultiTablesSink;
 import org.apache.flink.lakesoul.sink.committer.LakeSoulSinkCommitter;
 import org.apache.flink.lakesoul.sink.committer.LakeSoulSinkGlobalCommitter;
 import org.apache.flink.lakesoul.sink.state.*;
-import org.apache.flink.lakesoul.sink.writer.AbstractLakeSoulMultiTableSinkWriter;
-import org.apache.flink.lakesoul.sink.writer.DefaultLakeSoulWriterBucketFactory;
-import org.apache.flink.lakesoul.sink.writer.LakeSoulWriterBucketFactory;
-import org.apache.flink.lakesoul.sink.writer.NativeBucketWriter;
+import org.apache.flink.lakesoul.sink.writer.*;
 import org.apache.flink.streaming.api.functions.sink.filesystem.OutputFileConfig;
 import org.apache.flink.streaming.api.functions.sink.filesystem.rollingpolicies.CheckpointRollingPolicy;
 import org.apache.flink.streaming.api.functions.sink.filesystem.rollingpolicies.OnCheckpointRollingPolicy;
@@ -28,8 +25,8 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 /**
  * A builder for configuring the sink for bulk-encoding formats
  */
-public abstract class BulkFormatBuilder<IN, T extends BulkFormatBuilder<IN, T>>
-        extends BucketsBuilder<IN, T> {
+public abstract class BulkFormatBuilder<IN, OUT, T extends BulkFormatBuilder<IN, OUT, T>>
+        extends BucketsBuilder<IN, OUT, T> {
 
     protected final Path basePath;
 
@@ -37,19 +34,19 @@ public abstract class BulkFormatBuilder<IN, T extends BulkFormatBuilder<IN, T>>
 
     protected final LakeSoulWriterBucketFactory bucketFactory;
 
-    protected CheckpointRollingPolicy<RowData, String> rollingPolicy;
+    protected CheckpointRollingPolicy<OUT, String> rollingPolicy;
 
     protected OutputFileConfig outputFileConfig;
 
     protected Configuration conf;
 
-    protected BulkFormatBuilder(Path basePath, Configuration conf) {
+    protected BulkFormatBuilder(Path basePath, Configuration conf, LakeSoulWriterBucketFactory bucketFactory) {
         this(
                 basePath,
                 conf,
                 DEFAULT_BUCKET_CHECK_INTERVAL,
                 OnCheckpointRollingPolicy.build(),
-                new DefaultLakeSoulWriterBucketFactory(),
+                bucketFactory,
                 OutputFileConfig.builder().build());
     }
 
@@ -57,7 +54,7 @@ public abstract class BulkFormatBuilder<IN, T extends BulkFormatBuilder<IN, T>>
             Path basePath,
             Configuration conf,
             long bucketCheckInterval,
-            CheckpointRollingPolicy<RowData, String> policy,
+            CheckpointRollingPolicy<OUT, String> policy,
             LakeSoulWriterBucketFactory bucketFactory,
             OutputFileConfig outputFileConfig) {
         this.basePath = basePath;
@@ -73,7 +70,7 @@ public abstract class BulkFormatBuilder<IN, T extends BulkFormatBuilder<IN, T>>
         return self();
     }
 
-    public T withRollingPolicy(CheckpointRollingPolicy<RowData, String> rollingPolicy) {
+    public T withRollingPolicy(CheckpointRollingPolicy<OUT, String> rollingPolicy) {
         this.rollingPolicy = checkNotNull(rollingPolicy);
         return self();
     }
@@ -86,12 +83,12 @@ public abstract class BulkFormatBuilder<IN, T extends BulkFormatBuilder<IN, T>>
     /**
      * Creates the actual sink.
      */
-    public LakeSoulMultiTablesSink<IN> build() {
+    public LakeSoulMultiTablesSink<IN, OUT> build() {
         return new LakeSoulMultiTablesSink<>(this);
     }
 
     @Override
-    public abstract AbstractLakeSoulMultiTableSinkWriter<IN> createWriter(Sink.InitContext context, int subTaskId) throws IOException;
+    public abstract AbstractLakeSoulMultiTableSinkWriter<IN, OUT> createWriter(Sink.InitContext context, int subTaskId) throws IOException;
 
     @Override
     public LakeSoulSinkCommitter createCommitter() throws IOException {
@@ -102,14 +99,14 @@ public abstract class BulkFormatBuilder<IN, T extends BulkFormatBuilder<IN, T>>
     public SimpleVersionedSerializer<LakeSoulWriterBucketState> getWriterStateSerializer()
             throws IOException {
         return new LakeSoulWriterBucketStateSerializer(
-                NativeBucketWriter.NativePendingFileRecoverableSerializer.INSTANCE);
+                NativeParquetWriter.NativePendingFileRecoverableSerializer.INSTANCE);
     }
 
     @Override
     public SimpleVersionedSerializer<LakeSoulMultiTableSinkCommittable> getCommittableSerializer()
             throws IOException {
         return new LakeSoulSinkCommittableSerializer(
-                NativeBucketWriter.NativePendingFileRecoverableSerializer.INSTANCE);
+                NativeParquetWriter.NativePendingFileRecoverableSerializer.INSTANCE);
     }
 
     @Override

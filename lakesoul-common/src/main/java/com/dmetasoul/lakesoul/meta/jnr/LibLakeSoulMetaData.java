@@ -35,6 +35,23 @@ public interface LibLakeSoulMetaData {
 
     void clean_meta_for_test(IntegerCallback integerCallback, Pointer runtime, Pointer client);
 
+    Pointer create_split_desc_array(BooleanCallback booleanCallback, Pointer client, Pointer prepared, Pointer runtime, String tableName, String namespace);
+
+    void free_split_desc_array(Pointer json);
+
+    /**
+     * caller should ensure that ptr is valid
+     *
+     * @param c_string ptr
+     */
+    void free_c_string(Pointer c_string);
+
+    String debug(BooleanCallback booleanCallback);
+
+    void rust_logger_init();
+
+    void call_rust(@LongLong long addr, Integer len);
+
     void hello_world(Callback<byte[]> bytesCallback);
 
     void namespace(byte[] bytes, Integer len);
