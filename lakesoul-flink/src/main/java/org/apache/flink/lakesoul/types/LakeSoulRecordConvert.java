@@ -904,7 +904,7 @@ public class LakeSoulRecordConvert implements Serializable {
             }
             fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale, nullable, unsigned)));
             if (colType.equals("timestamp") || colType.equals("datetime") || colType.equals("date")
-                    || colType.equals("timestamp with local time zone") || colType.equals("smalldatetime")
+                    || colType.equals("smalldatetime")
                     || colType.equals("datetime2")) {
                 JsonNode jsonNode = valueNode.get(colName);
                 if (!jsonNode.isNull()) {
@@ -915,7 +915,7 @@ public class LakeSoulRecordConvert implements Serializable {
                     ZonedDateTime zonedDateTime = LocalDateTime.parse(value, FlinkUtil.ISO_DATE_TIME).atZone(serverTimeZone);
                     valueNode.put(colName, zonedDateTime.toInstant().toString());
                 }
-            } else if (colType.equals("timestamp with time zone")) {
+            } else if (colType.equals("datetimeoffset")) {
                 JsonNode jsonNode = valueNode.get(colName);
                 if (!jsonNode.isNull()) {
                     String value = jsonNode.asText();
@@ -989,7 +989,7 @@ public class LakeSoulRecordConvert implements Serializable {
                 }
                 fields.add(new RowType.RowField(colName, FlinkUtil.fromNameToLogicalType(colType, precision, scale, nullable, unsigned)));
                 if (colType.equals("timestamp") || colType.equals("datetime") || colType.equals("date")
-                        || colType.equals("timestamp with local time zone") || colType.equals("smalldatetime")
+                        || colType.equals("smalldatetime")
                         || colType.equals("datetime2")) {
                     JsonNode jsonNode = valueNode.get(colName);
                     if (!jsonNode.isNull()) {
@@ -1000,7 +1000,7 @@ public class LakeSoulRecordConvert implements Serializable {
                         ZonedDateTime zonedDateTime = LocalDateTime.parse(value, FlinkUtil.ISO_DATE_TIME).atZone(serverTimeZone);
                         valueNode.put(colName, zonedDateTime.toInstant().toString());
                     }
-                } else if (colType.equals("timestamp with time zone") || colType.equals("datetimeoffset")) {
+                } else if (colType.equals("datetimeoffset")) {
                     JsonNode jsonNode = valueNode.get(colName);
                     if (!jsonNode.isNull()) {
                         String value = jsonNode.asText();
