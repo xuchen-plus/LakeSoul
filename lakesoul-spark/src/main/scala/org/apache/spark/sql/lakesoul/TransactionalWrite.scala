@@ -134,6 +134,7 @@ trait TransactionalWrite {
         val cdcColName = cdcCol.get
         data.withColumn(cdcColName,
           when(col(cdcColName) === "update", "insert")
+            .otherwise(col(cdcColName))
         ).where(s"$cdcColName != 'delete'")
       } else {
         data
