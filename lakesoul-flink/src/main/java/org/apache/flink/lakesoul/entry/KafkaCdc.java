@@ -194,7 +194,7 @@ public class KafkaCdc {
             Pattern topicPattern = Pattern.compile(kafkaTopic);
             binarySourceRecordKafkaSourceBuilder.setTopicPattern(topicPattern);
         } else {
-            binarySourceRecordKafkaSourceBuilder.setTopics(Arrays.asList(kafkaTopic.split(",")));
+            binarySourceRecordKafkaSourceBuilder.setTopics(Arrays.asList(kafkaTopic.replaceAll("\\s", "").split(",")));
         }
         if (kafkaDataAvroType) {
             binarySourceRecordKafkaSourceBuilder.setDeserializer(new BinaryKafkaAvroRecordDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH), pro, dbName));
