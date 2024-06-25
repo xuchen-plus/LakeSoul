@@ -18,11 +18,10 @@ SPDX-License-Identifier: Apache-2.0
     <name>LakeSoul Flink</name>
 
     <artifactId>lakesoul-flink</artifactId>
-    <version>1.17-${revision}</version>
+    <version>1.19-${revision}</version>
     <properties>
-        <flink.version>1.17.1</flink.version>
-        <log4j.version>2.17.2</log4j.version>
-        <cdc.version>3.0.0</cdc.version>
+        <flink.version>1.20.1</flink.version>
+        <cdc.version>3.0.1</cdc.version>
     </properties>
 
     <dependencies>
@@ -92,7 +91,7 @@ SPDX-License-Identifier: Apache-2.0
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-connector-kafka</artifactId>
-            <version>${flink.version}</version>
+            <version>3.4.0-1.20</version>
             <scope>${local.scope}</scope>
         </dependency>
 
@@ -299,9 +298,9 @@ SPDX-License-Identifier: Apache-2.0
         </dependency>
 
         <dependency>
-            <groupId>org.furyio</groupId>
+            <groupId>org.apache.fury</groupId>
             <artifactId>fury-core</artifactId>
-            <version>0.4.1</version>
+            <version>0.5.0</version>
             <exclusions>
                 <exclusion>
                     <groupId>org.slf4j</groupId>
@@ -498,7 +497,7 @@ SPDX-License-Identifier: Apache-2.0
                             <include>com.fasterxml.jackson.module:jackson-module-scala_2.12</include>
                             <include>com.fasterxml.jackson.module:jackson-module-paranamer</include>
                             <include>com.thoughtworks.paranamer:paranamer</include>
-                            <include>org.furyio:fury-core</include>
+                            <include>org.apache.fury:fury-core</include>
                             <include>com.google.guava:guava</include>
                             <include>com.google.guava:failureaccess</include>
                             <!-- casbin & aspectj -->

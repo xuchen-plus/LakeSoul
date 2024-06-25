@@ -4,7 +4,9 @@
 
 package org.apache.flink.lakesoul.test;
 
+import com.dmetasoul.lakesoul.meta.DBManager;
 import com.dmetasoul.lakesoul.meta.entity.Namespace;
+import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
@@ -13,6 +15,7 @@ import org.junit.After;
 import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.rules.ExpectedException;
 
 import java.io.File;
@@ -29,9 +32,16 @@ public class LakeSoulCatalogDatabaseTest extends LakeSoulCatalogTestBase {
     @After
     @Override
     public void clean() {
+        sql("USE `default`");
         sql("DROP TABLE IF EXISTS %s.%s", DATABASE, flinkTable);
         sql("DROP DATABASE IF EXISTS %s", DATABASE);
         super.clean();
+    }
+
+    @BeforeAll
+    public static void beforeAll() {
+        DBManager db = new DBManager();
+        db.cleanMeta();
     }
 
 
@@ -51,6 +61,7 @@ public class LakeSoulCatalogDatabaseTest extends LakeSoulCatalogTestBase {
 
     @Test
     public void testDropEmptyDatabase() {
+
         Assert.assertFalse(
                 "Namespace should not already exist",
                 validationCatalog.databaseExists(DATABASE));
@@ -149,11 +160,12 @@ public class LakeSoulCatalogDatabaseTest extends LakeSoulCatalogTestBase {
         Assert.assertEquals("Only 1 table", 1, tables.size());
         Assert.assertEquals("Table name should match", flinkTable, tables.get(0).getField(0));
 
-        Assert.assertThrows(ValidationException.class, () -> sql("DROP DATABASE %s", DATABASE));
+        Assert.assertThrows(TableException.class, () -> sql("DROP DATABASE %s", DATABASE));
         Assert.assertTrue(
                 "Namespace should not be dropped",
                 validationCatalog.databaseExists(DATABASE));
 
+        sql("USE `default`");
         sql("DROP DATABASE %s CASCADE", DATABASE);
         Assert.assertFalse(
                 "Namespace should have been dropped",

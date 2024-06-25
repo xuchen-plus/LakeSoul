@@ -41,7 +41,7 @@ import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.api.java.typeutils.TypeExtractor;
 import org.apache.flink.configuration.ExecutionOptions;
 import org.apache.flink.core.memory.ByteArrayOutputStreamWithPos;
-import org.apache.flink.shaded.guava30.com.google.common.collect.LinkedHashMultiset;
+import org.apache.flink.shaded.guava31.com.google.common.collect.LinkedHashMultiset;
 import org.apache.flink.table.api.Table;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.internal.TableEnvironmentImpl;

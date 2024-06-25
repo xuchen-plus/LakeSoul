@@ -8,9 +8,13 @@ import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.lakesoul.metadata.LakeSoulCatalog;
 import org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.table.api.*;
+import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.SqlDialect;
+import org.apache.flink.table.api.TableEnvironment;
+import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.planner.factories.TestValuesTableFactory;
+import org.apache.flink.types.Row;
 
 import java.util.Comparator;
 import java.util.List;
@@ -21,6 +25,7 @@ import java.util.function.Consumer;
 
 import static org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.in;
 
 public class LakeSoulTestUtils {
 
@@ -63,7 +68,8 @@ public class LakeSoulTestUtils {
         return createStreamExecutionEnvironment(2, 5000, 5000);
     }
 
-    public static StreamExecutionEnvironment createStreamExecutionEnvironment(int parallelism, long checkpointInterval, long checkpointTimeout) {
+    public static StreamExecutionEnvironment createStreamExecutionEnvironment(int parallelism, long checkpointInterval,
+                                                                              long checkpointTimeout) {
         org.apache.flink.configuration.Configuration config = new org.apache.flink.configuration.Configuration();
         config.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(config);
@@ -101,7 +107,8 @@ public class LakeSoulTestUtils {
 
     public static void checkStreamingQueryAnswer(StreamTableEnvironment tableEnv, String sourceTable, String querySql,
                                                  String schemaString,
-                                                 Consumer<String> f, String expectedAnswer, long timeout) {
+                                                 Consumer<String> f, String expectedAnswer, long timeout)
+            throws InterruptedException {
         tableEnv.executeSql(
                 String.format("DROP TABLE IF EXISTS default_catalog.default_database.%s_sink", sourceTable));
         tableEnv.executeSql(String.format("CREATE TABLE default_catalog.default_database.%s_sink(", sourceTable) +
@@ -110,12 +117,17 @@ public class LakeSoulTestUtils {
                 "'connector' = 'values', 'sink-insert-only' = 'false'" +
                 ")");
         TestValuesTableFactory.clearAllData();
+        f.accept("");
+        Thread.sleep(3000);
+        String insertIntoValuesSql =
+                String.format("INSERT INTO default_catalog.default_database.%s_sink ", sourceTable) + querySql;
+        System.err.println(tableEnv.explainSql(insertIntoValuesSql));
         final TableResult execute =
-                tableEnv.executeSql(
-                        String.format("INSERT INTO default_catalog.default_database.%s_sink ", sourceTable) + querySql);
+                tableEnv.executeSql(insertIntoValuesSql);
         Thread thread = new Thread(() -> {
             try {
                 execute.await(timeout, TimeUnit.SECONDS);
+                System.out.println("execute insert into values sink finished");
             } catch (InterruptedException | ExecutionException e) {
                 throw new RuntimeException(e);
             } catch (TimeoutException e) {
@@ -125,18 +137,19 @@ public class LakeSoulTestUtils {
             }
         });
         thread.start();
-        f.accept("");
         try {
             thread.join();
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
-        List<String> results = TestValuesTableFactory.getResults(String.format("%s_sink", sourceTable));
+        List<Row> results = TestValuesTableFactory.getResults(String.format("%s_sink", sourceTable));
         if (expectedAnswer.isEmpty()) {
             System.out.println(results);
         } else {
             results.sort(Comparator.comparing(
-                    row -> Integer.valueOf(row.substring(3, (row.contains(",")) ? row.indexOf(",") : row.length() - 1))));
+                    row -> Integer.valueOf(row.toString().substring(3, (row.toString().contains(",")) ?
+                            row.toString().indexOf(",") :
+                            row.toString().length() - 1))));
             assertThat(results.toString()).isEqualTo(expectedAnswer);
         }
     }

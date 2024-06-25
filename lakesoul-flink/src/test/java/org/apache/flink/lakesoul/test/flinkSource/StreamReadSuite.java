@@ -25,7 +25,7 @@ public class StreamReadSuite extends AbstractTestBase {
     );
 
     @Test
-    public void testLakesoulSourceIncrementalStream() {
+    public void testLakesoulSourceIncrementalStream() throws InterruptedException {
         for (Tuple2<Integer, Integer> tup : BUCKET_NUM_AND_PARALLELISM) {
             int hashBucketNum = tup.f0;
             int parallelism = tup.f1;
@@ -83,7 +83,7 @@ public class StreamReadSuite extends AbstractTestBase {
     }
 
     @Test
-    public void testLakesoulSourceSelectMultiRangeAndHashConditionAnd() {
+    public void testLakesoulSourceSelectMultiRangeAndHashConditionAnd() throws InterruptedException {
         for (Tuple2<Integer, Integer> tup : BUCKET_NUM_AND_PARALLELISM) {
             int hashBucketNum = tup.f0;
             int parallelism = tup.f1;
@@ -152,7 +152,7 @@ public class StreamReadSuite extends AbstractTestBase {
     }
 
     @Test
-    public void testLakesoulSourceSelectMultiRangeAndHashConditionOr() {
+    public void testLakesoulSourceSelectMultiRangeAndHashConditionOr() throws InterruptedException {
         for (Tuple2<Integer, Integer> tup : BUCKET_NUM_AND_PARALLELISM) {
             int hashBucketNum = tup.f0;
             int parallelism = tup.f1;
@@ -223,7 +223,7 @@ public class StreamReadSuite extends AbstractTestBase {
     }
 
     @Test
-    public void testLakesoulSourceSelectWhere() {
+    public void testLakesoulSourceSelectWhere() throws InterruptedException {
         for (Tuple2<Integer, Integer> tup : BUCKET_NUM_AND_PARALLELISM) {
             int hashBucketNum = tup.f0;
             int parallelism = tup.f1;
@@ -280,7 +280,7 @@ public class StreamReadSuite extends AbstractTestBase {
     }
 
     @Test
-    public void testLakesoulSourceSelectJoin() {
+    public void testLakesoulSourceSelectJoin() throws InterruptedException {
         for (Tuple2<Integer, Integer> tup : BUCKET_NUM_AND_PARALLELISM) {
             int hashBucketNum = tup.f0;
             int parallelism = tup.f1;
@@ -358,7 +358,7 @@ public class StreamReadSuite extends AbstractTestBase {
     }
 
     @Test
-    public void testLakesoulSourceSelectDistinct() {
+    public void testLakesoulSourceSelectDistinct() throws InterruptedException {
         for (Tuple2<Integer, Integer> tup : BUCKET_NUM_AND_PARALLELISM) {
             int hashBucketNum = tup.f0;
             int parallelism = tup.f1;

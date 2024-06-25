@@ -25,13 +25,17 @@ import org.apache.flink.util.CollectionUtil;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Random;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import static org.apache.flink.lakesoul.tool.JobOptions.*;
 import static org.apache.flink.lakesoul.tool.JobOptions.JOB_CHECKPOINT_INTERVAL;
+import static org.apache.flink.lakesoul.tool.JobOptions.JOB_CHECKPOINT_MODE;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class CHBenchmark {
@@ -47,11 +51,13 @@ public class CHBenchmark {
 
     public static final int orderNumPerBatch = customRecordNum;
 
-    public static final int newOrderInterval = 10*1000;
+    public static final int newOrderInterval = 10 * 1000;
 
     public static final int tailCustomRecordNum = customRecordNum / 3;
 
-    public static final int insertTimes = (customRecordNum - tailCustomRecordNum) / customerBatchSize * updateCustomerInterval / newOrderInterval - 1;
+    public static final int
+            insertTimes =
+            (customRecordNum - tailCustomRecordNum) / customerBatchSize * updateCustomerInterval / newOrderInterval - 1;
 
     private static final String lookupTtl = "10s";
 
@@ -67,15 +73,15 @@ public class CHBenchmark {
     static final String[] create_table = {
             // Streaming COLLECTION Table Source For test
             "CREATE TABLE default_catalog.default_database.customer (\n" +
-            "    c_w_id         int            NOT NULL,\n" +
-            "    c_d_id         int            NOT NULL,\n" +
-            "    c_id           int            NOT NULL,\n" +
-            "    proctime         as proctime() , \n" +
-            "    PRIMARY KEY (c_w_id, c_d_id, c_id) NOT ENFORCED\n" +
-            ")" +
-            "WITH (" +
+                    "    c_w_id         int            NOT NULL,\n" +
+                    "    c_d_id         int            NOT NULL,\n" +
+                    "    c_id           int            NOT NULL,\n" +
+                    "    proctime         as proctime() , \n" +
+                    "    PRIMARY KEY (c_w_id, c_d_id, c_id) NOT ENFORCED\n" +
+                    ")" +
+                    "WITH (" +
                     "'connector'='COLLECTION','is-bounded' = 'false'" +
-            ")",
+                    ")",
 
             //  Batch COLLECTION Table Source For test
             "CREATE TABLE default_catalog.default_database.bounded_customer (\n" +
@@ -90,27 +96,31 @@ public class CHBenchmark {
 
             // Streaming COLLECTION Table Source For test
             "CREATE TABLE customer (\n" +
-                "    c_w_id         int            NOT NULL,\n" +
-                "    c_d_id         int            NOT NULL,\n" +
-                "    c_id           int            NOT NULL,\n" +
-                "    PRIMARY KEY (c_w_id, c_d_id, c_id) NOT ENFORCED\n" +
-                ")" +
-                "WITH (" +
-                String.format("'format'='lakesoul','path'='%s', '%s'='%s', 'hashBucketNum'='2', '%s'='false' ", "tmp/customer", JobOptions.LOOKUP_JOIN_CACHE_TTL.key(), lookupTtl,LakeSoulSinkOptions.USE_CDC.key()) +
-                ")",
+                    "    c_w_id         int            NOT NULL,\n" +
+                    "    c_d_id         int            NOT NULL,\n" +
+                    "    c_id           int            NOT NULL,\n" +
+                    "    PRIMARY KEY (c_w_id, c_d_id, c_id) NOT ENFORCED\n" +
+                    ")" +
+                    "WITH (" +
+                    String.format("'format'='lakesoul','path'='%s', '%s'='%s', 'hashBucketNum'='2', '%s'='false' ",
+                            "tmp/customer", JobOptions.LOOKUP_JOIN_CACHE_TTL.key(), lookupTtl,
+                            LakeSoulSinkOptions.USE_CDC.key()) +
+                    ")",
 
             // LakeSoul Lookup Table, test no partition
             "CREATE TABLE oorder (\n" +
-            "    o_w_id       int       NOT NULL,\n" +
-            "    o_d_id       int       NOT NULL,\n" +
-            "    o_id         int       NOT NULL,\n" +
-            "    o_c_id       int       NOT NULL,\n" +
+                    "    o_w_id       int       NOT NULL,\n" +
+                    "    o_d_id       int       NOT NULL,\n" +
+                    "    o_id         int       NOT NULL,\n" +
+                    "    o_c_id       int       NOT NULL,\n" +
 
-            "    PRIMARY KEY (o_w_id, o_d_id, o_id) NOT ENFORCED\n" +
-            ")"  +
-            "WITH (" +
-            String.format("'format'='lakesoul','path'='%s', '%s'='%s', 'hashBucketNum'='2', '%s'='false' ", "tmp/oorder", JobOptions.LOOKUP_JOIN_CACHE_TTL.key(), lookupTtl,LakeSoulSinkOptions.USE_CDC.key()) +
-            ")",
+                    "    PRIMARY KEY (o_w_id, o_d_id, o_id) NOT ENFORCED\n" +
+                    ")" +
+                    "WITH (" +
+                    String.format("'format'='lakesoul','path'='%s', '%s'='%s', 'hashBucketNum'='2', '%s'='false' ",
+                            "tmp/oorder", JobOptions.LOOKUP_JOIN_CACHE_TTL.key(), lookupTtl,
+                            LakeSoulSinkOptions.USE_CDC.key()) +
+                    ")",
 
             // LakeSoul Lookup Table, test partition
 //            "CREATE TABLE oorder (\n" +
@@ -162,29 +172,29 @@ public class CHBenchmark {
                     "    c_id           int            NOT NULL,\n" +
                     "    c_count        BIGINT            NOT NULL\n" +
                     ")" +
-            "WITH (" +
-            "'connector' = 'values', 'sink-insert-only' = 'false'" +
-            ")",
+                    "WITH (" +
+                    "'connector' = 'values', 'sink-insert-only' = 'false'" +
+                    ")",
     };
 
     static final String query_13_collection_streaming =
 //            "SELECT\n" +
 //            "   c_count, count(*) AS custdist\n" +
 //            "FROM (\n" +
-                "SELECT " +
+            "SELECT " +
 //                        "/*+ LOOKUP('table'='oorder', 'async'='false') */" +
-                        "c_id, count(o_id) AS c_count \n" +
-                "FROM " +
+                    "c_id, count(o_id) AS c_count \n" +
+                    "FROM " +
                     "default_catalog.default_database.customer\n" +
                     "LEFT OUTER JOIN `oorder` " +
-                        "for system_time as of proctime\n" +
+                    "for system_time as of proctime\n" +
                     "ON (c_w_id = o_w_id AND c_d_id = o_d_id AND c_id = o_c_id " +
 //                    "AND o_carrier_id > 8" +
                     ")\n" +
-                "GROUP BY c_id" +
+                    "GROUP BY c_id" +
 //                        ") AS c_orders\n" +
 //            "GROUP BY c_count\n" +
-            "";
+                    "";
 //                    +
 //            "ORDER BY custdist DESC, c_count DESC";
 
@@ -245,7 +255,8 @@ public class CHBenchmark {
         final String tableName;
         final int maxRepetition;
 
-        public GenDataThread(LakeSoulCatalog lakeSoulCatalog, String tableName, int interval, int batchNum, int batchSize, String format, int maxRepetition) {
+        public GenDataThread(LakeSoulCatalog lakeSoulCatalog, String tableName, int interval, int batchNum,
+                             int batchSize, String format, int maxRepetition) {
             super();
             this.lakeSoulCatalog = lakeSoulCatalog;
             this.tableName = tableName;
@@ -281,9 +292,10 @@ public class CHBenchmark {
                     for (int r = 0; r < rep; r++)
                         // value with schema(o_w_id, o_d_id, o_id, o_c_id)
 //                        valueList.add(String.format(format, counter++, j));
-                        valueList.add(String.format(format, counter++, j, timeParValue.get(0), timeParValue.get(1), timeParValue.get(2), timeParValue.get(3), timeParValue.get(4)));
+                        valueList.add(String.format(format, counter++, j, timeParValue.get(0), timeParValue.get(1),
+                                timeParValue.get(2), timeParValue.get(3), timeParValue.get(4)));
                 }
-                String values = String.join(",",valueList);
+                String values = String.join(",", valueList);
                 String insertSql = String.format("insert into %s values %s", tableName, values);
                 batchEnv.executeSql(insertSql);
                 try {
@@ -332,7 +344,8 @@ public class CHBenchmark {
             checkpointingMode = CheckpointingMode.AT_LEAST_ONCE;
         }
         env.getCheckpointConfig().setCheckpointingMode(checkpointingMode);
-        env.getCheckpointConfig().setExternalizedCheckpointCleanup(CheckpointConfig.ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION);
+        env.getCheckpointConfig().setExternalizedCheckpointCleanup(
+                CheckpointConfig.ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION);
 
 //        env.getCheckpointConfig().setCheckpointStorage(parameter.get(FLINK_CHECKPOINT.key()));
         conf.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
@@ -352,18 +365,25 @@ public class CHBenchmark {
 
         initCollectionSourceData(updateCustomerInterval);
         // used for no partition table
-        GenDataThread newOrderThread = new GenDataThread(lakeSoulCatalog, "oorder", newOrderInterval, insertTimes, orderNumPerBatch, "(1, 1, %s, %s)", 5);
+        GenDataThread
+                newOrderThread =
+                new GenDataThread(lakeSoulCatalog, "oorder", newOrderInterval, insertTimes, orderNumPerBatch,
+                        "(1, 1, %s, %s)", 5);
         // used for year-month-day-hour-minute partition table
 //        GenDataThread newOrderThread = new GenDataThread(lakeSoulCatalog, "oorder", newOrderInterval, insertTimes, orderNumPerBatch, "(1, 1, %s, %s, %s, %s, %s, %s, %s)", 5);
 
         newOrderThread.start();
 //        tableEnv.executeSql("INSERT INTO default_catalog.default_database.sink " + query_13_collection_streaming).await();
 
-        GenDataThread newCustomerThread = new GenDataThread(lakeSoulCatalog, "customer", updateCustomerInterval, customerBatchNum, customerBatchSize, "(1, 1, %s)", 1);
+        GenDataThread
+                newCustomerThread =
+                new GenDataThread(lakeSoulCatalog, "customer", updateCustomerInterval, customerBatchNum,
+                        customerBatchSize, "(1, 1, %s)", 1);
         newCustomerThread.start();
 
         try {
-            tableEnv.executeSql("INSERT INTO default_catalog.default_database.sink " + query_13_lakesoul_streaming).await(updateCustomerInterval * customerBatchNum + 10000, TimeUnit.MILLISECONDS);
+            tableEnv.executeSql("INSERT INTO default_catalog.default_database.sink " + query_13_lakesoul_streaming)
+                    .await(updateCustomerInterval * customerBatchNum + 10000, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } catch (ExecutionException e) {
@@ -371,8 +391,9 @@ public class CHBenchmark {
         } catch (TimeoutException e) {
             System.out.println("Join is done.");
         }
-        List<String> results = TestValuesTableFactory.getResults("sink");
-        results.sort(Comparator.comparing(row -> Integer.valueOf(row.substring(3, row.indexOf(",")))));
+        List<Row> results = TestValuesTableFactory.getResults("sink");
+        results.sort(
+                Comparator.comparing(row -> Integer.valueOf(row.toString().substring(3, row.toString().indexOf(",")))));
 
         System.out.println(results);
 
@@ -389,11 +410,12 @@ public class CHBenchmark {
         System.out.println(batchResult);
         try {
             assertThat(batchResult.toString()).isNotEqualTo(results.toString());
-            assertThat(batchResult.subList(customRecordNum - tailCustomRecordNum, customRecordNum).toString()).isEqualTo(results.subList(customRecordNum - tailCustomRecordNum, customRecordNum).toString());
+            assertThat(
+                    batchResult.subList(customRecordNum - tailCustomRecordNum, customRecordNum).toString()).isEqualTo(
+                    results.subList(customRecordNum - tailCustomRecordNum, customRecordNum).toString());
             System.out.println("Assertion Pass");
-        }
-        finally {
+        } finally {
             System.exit(0);
         }
-   }
+    }
 }

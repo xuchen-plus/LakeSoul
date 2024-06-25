@@ -209,8 +209,6 @@ public class FlinkCommitterTest {
         env.addSource(source, IntegerTypeInfo.INT_TYPE_INFO)
                 .sinkTo(
                         TestSink.newBuilder()
-                                .setCommittableSerializer(
-                                        TestSink.StringCommittableSerializer.INSTANCE)
                                 .setGlobalCommitter(
                                         (Supplier<Queue<String>> & Serializable)
                                                 () -> GLOBAL_COMMIT_QUEUE)
@@ -238,8 +236,6 @@ public class FlinkCommitterTest {
         env.fromCollection(SOURCE_DATA)
                 .sinkTo(
                         TestSink.newBuilder()
-                                .setCommittableSerializer(
-                                        TestSink.StringCommittableSerializer.INSTANCE)
                                 .setGlobalCommitter(
                                         (Supplier<Queue<String>> & Serializable)
                                                 () -> GLOBAL_COMMIT_QUEUE)
