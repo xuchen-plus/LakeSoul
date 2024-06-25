@@ -27,7 +27,6 @@ object CleanExpiredData {
     defaultCompactionTTL = parameter.getInt("redundant.data.save.time", defaultCompactionTTL)
 
     val spark: SparkSession = SparkSession.builder
-      .master("local[4]")
       .getOrCreate()
     cleanAllPartitionExpiredData(spark)
 
