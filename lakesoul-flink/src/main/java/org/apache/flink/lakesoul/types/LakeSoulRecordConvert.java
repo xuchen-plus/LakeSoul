@@ -972,8 +972,16 @@ public class LakeSoulRecordConvert implements Serializable {
                     unsigned = true;
                     colType = colType.replace("unsigned", "").trim();
                 }
-                int precision = typeDefine.get("connect.parameters").get("length").asInt();
-                int scale = typeDefine.get("connect.parameters").get("scale").asInt();
+		int precision = 0;
+                JsonNode lengthNode = typeDefine.get("connect.parameters").get("length");
+                if (lengthNode != null && !lengthNode.isNull()) {
+                    precision = lengthNode.asInt();
+                }
+                int scale = 0;
+                JsonNode scaleNode = typeDefine.get("connect.parameters").get("scale");
+                if (scaleNode != null && !scaleNode.isNull()) {
+                    scaleNode.asInt();
+                }
                 boolean nullable = true;
                 if (keyList.contains(colName)) {
                     nullable = false;
