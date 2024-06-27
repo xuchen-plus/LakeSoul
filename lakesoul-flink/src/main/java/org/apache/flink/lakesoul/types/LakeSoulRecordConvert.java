@@ -967,21 +967,28 @@ public class LakeSoulRecordConvert implements Serializable {
                 boolean unsigned = false;
 
                 JsonNode typeDefine = node.get("type").get(1);
-                String colType = typeDefine.get("connect.parameters").get("sourceType").asText().toLowerCase(Locale.ROOT);
-                if (colType.contains("unsigned")) {
-                    unsigned = true;
-                    colType = colType.replace("unsigned", "").trim();
-                }
-		int precision = 0;
-                JsonNode lengthNode = typeDefine.get("connect.parameters").get("length");
-                if (lengthNode != null && !lengthNode.isNull()) {
-                    precision = lengthNode.asInt();
-                }
+		String colType;
+                int precision = 0;
                 int scale = 0;
-                JsonNode scaleNode = typeDefine.get("connect.parameters").get("scale");
-                if (scaleNode != null && !scaleNode.isNull()) {
-                    scaleNode.asInt();
+                JsonNode parametersNode = typeDefine.get("connect.parameters");
+                if (parametersNode != null && !parametersNode.isNull()) {
+                    colType = parametersNode.get("sourceType").asText().toLowerCase(Locale.ROOT);
+                    if (colType.contains("unsigned")) {
+                        unsigned = true;
+                        colType = colType.replace("unsigned", "").trim();
+                    }
+                    JsonNode lengthNode = typeDefine.get("connect.parameters").get("length");
+                    if (lengthNode != null && !lengthNode.isNull()) {
+                        precision = lengthNode.asInt();
+                    }
+                    JsonNode scaleNode = typeDefine.get("connect.parameters").get("scale");
+                    if (scaleNode != null && !scaleNode.isNull()) {
+                        scale = scaleNode.asInt();
+                    }
+                } else {
+                    colType = typeDefine.asText().toLowerCase(Locale.ROOT);
                 }
+
                 boolean nullable = true;
                 if (keyList.contains(colName)) {
                     nullable = false;
