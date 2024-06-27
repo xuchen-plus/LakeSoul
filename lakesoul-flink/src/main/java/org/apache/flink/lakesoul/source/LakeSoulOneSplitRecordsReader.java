@@ -110,7 +110,7 @@ public class LakeSoulOneSplitRecordsReader implements RecordsWithSplitIds<RowDat
                 this.schema.getFieldNames().stream().filter(name -> !this.partitions.containsKey(name))
                         .collect(Collectors.toList());
 
-        if (!nonPartitionColumns.isEmpty()) {
+        if (!schemaWithPk.getFields().isEmpty()) {
             ArrowUtils.setLocalTimeZone(FlinkUtil.getLocalTimeZone(conf));
             // native reader requires pk columns in schema
             Schema arrowSchema = ArrowUtils.toArrowSchema(schemaWithPk);
