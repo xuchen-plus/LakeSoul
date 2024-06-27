@@ -6,7 +6,6 @@ package org.apache.flink.lakesoul.test.flinkSource;
 
 import org.apache.flink.lakesoul.test.AbstractTestBase;
 import org.apache.flink.table.api.TableEnvironment;
-import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.internal.TableImpl;
 import org.apache.flink.types.Row;
@@ -38,7 +37,7 @@ public class DMLSuite extends AbstractTestBase {
     }
 
     @Test
-    public void testInsertPartitionTableSQL() throws ExecutionException, InterruptedException {
+    public void testInsertPkPartitionTableSQL() throws ExecutionException, InterruptedException {
         TableEnvironment tEnv = TestUtils.createTableEnv(BATCH_TYPE);
         createLakeSoulSourceTableUserWithRange(tEnv);
         tEnv.executeSql("INSERT INTO user_info_1 VALUES (2, 'Alice', 80),(3, 'Jack', 75)").await();
@@ -52,6 +51,17 @@ public class DMLSuite extends AbstractTestBase {
         List<Row> results1 = CollectionUtil.iteratorToList(flinkTable1.execute().collect());
         TestUtils.checkEqualInAnyOrder(results1,
                 new String[]{"+I[2, Alice, 80]", "+I[3, Jack, 75]", "+I[4, Mike, 70]"});
+        List<Row>
+                results2 =
+                CollectionUtil.iteratorToList(tEnv.executeSql("select order_id from user_info_1").collect());
+        TestUtils.checkEqualInAnyOrder(results2,
+                new String[]{"+I[2]", "+I[3]", "+I[4]"});
+        List<Row>
+                results3 =
+                CollectionUtil.iteratorToList(
+                        tEnv.executeSql("select order_id, sum(score) from user_info_1 group by order_id").collect());
+        TestUtils.checkEqualInAnyOrder(results3,
+                new String[]{"+I[2, 80]", "+I[3, 75]", "+I[4, 70]"});
     }
 
 
@@ -72,6 +82,26 @@ public class DMLSuite extends AbstractTestBase {
         List<Row> results = CollectionUtil.iteratorToList(flinkTable.execute().collect());
         TestUtils.checkEqualInAnyOrder(results,
                 new String[]{"+I[2, Alice, 80]", "+I[3, Amy, 100]", "+I[3, Jack, 100]", "+I[4, Mike, 70]"});
+    }
+
+    @Test
+    public void testNonPkPartitionedTableSQL() throws ExecutionException, InterruptedException {
+        TableEnvironment tEnv = TestUtils.createTableEnv(BATCH_TYPE);
+        createLakeSoulSourceNonPkWithPartitionTableUser(tEnv);
+        tEnv.executeSql(
+                        "INSERT INTO user_info_3 VALUES (2, 'Alice', 80),(3, 'Jack', 75),(3, 'Amy', 95),(4, 'Mike', 70)")
+                .await();
+        List<Row>
+                results1 =
+                CollectionUtil.iteratorToList(tEnv.executeSql("select order_id from user_info_3").collect());
+        TestUtils.checkEqualInAnyOrder(results1,
+                new String[]{"+I[2]", "+I[3]", "+I[3]", "+I[4]"});
+        List<Row>
+                results2 =
+                CollectionUtil.iteratorToList(
+                        tEnv.executeSql("select order_id, sum(score) from user_info_3 group by order_id").collect());
+        TestUtils.checkEqualInAnyOrder(results2,
+                new String[]{"+I[2, 80]", "+I[3, 170]", "+I[4, 70]"});
     }
 
     @Test
@@ -228,6 +258,21 @@ public class DMLSuite extends AbstractTestBase {
                 "    'path'='" + getTempDirUri("/lakeSource/user") +
                 "' )";
         tEnvs.executeSql("DROP TABLE if exists user_info");
+        tEnvs.executeSql(createUserSql);
+    }
+
+    private void createLakeSoulSourceNonPkWithPartitionTableUser(TableEnvironment tEnvs)
+            throws ExecutionException, InterruptedException {
+        String createUserSql = "create table user_info_3 (" +
+                "    order_id INT," +
+                "    name varchar," +
+                "    score DECIMAL" +
+                ") PARTITIONED BY ( order_id )" +
+                " WITH (" +
+                "    'format'='lakesoul'," +
+                "    'path'='" + getTempDirUri("/lakeSource/user_nonpk_partitioned") +
+                "' )";
+        tEnvs.executeSql("DROP TABLE if exists user_info_3");
         tEnvs.executeSql(createUserSql);
     }
 
