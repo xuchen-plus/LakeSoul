@@ -223,7 +223,7 @@ public class FlinkUtil {
             case "datetime2":
             case "datetimeoffset":
             case "timestamp":
-                return new LocalZonedTimestampType(nullable, 9);
+                return new LocalZonedTimestampType(nullable, 6);
             case "timestamp with time zone":
             case "timestamp with local time zone":
                 return new VarCharType(nullable, Integer.MAX_VALUE);
