@@ -83,6 +83,7 @@ public class LakeSoulKeyGen implements Serializable {
         seed = Murmur3HashFunction.hash(field, DoubleType, seed);
         break;
       case DATE:
+      case TIME_WITHOUT_TIME_ZONE:
         seed = Murmur3HashFunction.hash(field, IntegerType, seed);
         break;
       case BOOLEAN:
