@@ -6,6 +6,7 @@
 
 package org.apache.spark.sql.execution.datasources
 
+import com.dmetasoul.lakesoul.meta.DBConfig
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileAlreadyExistsException, Path}
 import org.apache.hadoop.mapreduce._
@@ -33,7 +34,6 @@ import org.apache.spark.sql.lakesoul.rules.withPartitionAndOrdering
 import org.apache.spark.sql.lakesoul.sources.LakeSoulSQLConf
 import org.apache.spark.sql.vectorized.ArrowFakeRowAdaptor
 import org.apache.spark.util.{SerializableConfiguration, Utils}
-
 import com.dmetasoul.lakesoul.meta.DBConfig.LAKESOUL_NON_PARTITION_TABLE_PART_DESC
 
 import java.util.{Date, UUID}
@@ -395,6 +395,7 @@ object LakeSoulFileWriter extends Logging {
     private var fileCounter: Int = _
     private var recordsInFile: Long = _
     private val partValue: Option[String] = options.get("partValue").filter(_ != LAKESOUL_NON_PARTITION_TABLE_PART_DESC)
+      .map(_.replace(DBConfig.LAKESOUL_RANGE_PARTITION_SPLITTER, "/"))
 
     private def newOutputWriter(): Unit = {
       recordsInFile = 0

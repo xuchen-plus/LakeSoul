@@ -5,9 +5,13 @@
 package org.apache.flink.lakesoul.tool;
 
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.TimestampData;
+import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.spark.sql.catalyst.expressions.Murmur3HashFunction;
+import org.apache.spark.sql.types.DataTypes;
+import org.apache.spark.sql.types.Decimal;
 import org.apache.spark.unsafe.types.UTF8String;
 
 import java.io.Serializable;
@@ -79,11 +83,24 @@ public class LakeSoulKeyGen implements Serializable {
         seed = Murmur3HashFunction.hash(field, DoubleType, seed);
         break;
       case DATE:
-        seed = Murmur3HashFunction.hash(field,IntegerType, seed);
+      case TIME_WITHOUT_TIME_ZONE:
+        seed = Murmur3HashFunction.hash(field, IntegerType, seed);
         break;
       case BOOLEAN:
         seed = Murmur3HashFunction.hash(field, BooleanType, seed);
         break;
+      case DECIMAL:
+        DecimalType decimalType = (DecimalType) type;
+        UTF8String stringValue = UTF8String.fromString(String.valueOf(field));
+        seed = Murmur3HashFunction.hash(Decimal.fromString(stringValue), DataTypes.createDecimalType(decimalType.getPrecision(), decimalType.getScale()), seed);
+        break;	
+      case TIMESTAMP_WITH_TIME_ZONE:
+      case TIMESTAMP_WITHOUT_TIME_ZONE:
+      case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+        TimestampData td = (TimestampData) field;
+        long longValue = td.getMillisecond() * 1000000 + td.getNanoOfMillisecond();
+        seed = Murmur3HashFunction.hash(longValue, IntegerType, seed);
+        break;	
       default:
         throw new RuntimeException("not support this partition type now :" + type.getTypeRoot().toString());
     }

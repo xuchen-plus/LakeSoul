@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -138,18 +139,40 @@ pub fn transform_array(
                 .clone()
                 .with_timezone_opt(Some(target_tz))
                 .into_data(),
-            TimeUnit::Microsecond => as_primitive_array::<TimestampMicrosecondType>(&array)
-                .clone()
-                .with_timezone_opt(Some(target_tz))
-                .into_data(),
+            TimeUnit::Microsecond => {
+                // workaround compatibility issue for Spark reading Flink's timestamp(9) type
+                if array.as_any().is::<PrimitiveArray<TimestampNanosecondType>>() {
+                    as_primitive_array::<TimestampNanosecondType>(&array)
+                        .clone()
+                        .reinterpret_cast::<TimestampMicrosecondType>()
+                        .with_timezone_opt(Some(target_tz))
+                        .into_data()
+                } else {
+                    as_primitive_array::<TimestampMicrosecondType>(&array)
+                        .clone()
+                        .with_timezone_opt(Some(target_tz))
+                        .into_data()
+                }
+            },
             TimeUnit::Millisecond => as_primitive_array::<TimestampMillisecondType>(&array)
                 .clone()
                 .with_timezone_opt(Some(target_tz))
                 .into_data(),
-            TimeUnit::Nanosecond => as_primitive_array::<TimestampNanosecondType>(&array)
-                .clone()
-                .with_timezone_opt(Some(target_tz))
-                .into_data(),
+            TimeUnit::Nanosecond => {
+                // workaround compatibility issue for Spark reading Flink's timestamp(9) type
+                if array.as_any().is::<PrimitiveArray<TimestampMicrosecondType>>() {
+                    as_primitive_array::<TimestampMicrosecondType>(&array)
+                        .clone()
+                        .reinterpret_cast::<TimestampNanosecondType>()
+                        .with_timezone_opt(Some(target_tz))
+                        .into_data()
+                } else {
+                    as_primitive_array::<TimestampNanosecondType>(&array)
+                        .clone()
+                        .with_timezone_opt(Some(target_tz))
+                        .into_data()
+                }
+            },
         }),
         DataType::Struct(target_child_fields) => {
             let orig_array = as_struct_array(&array);
