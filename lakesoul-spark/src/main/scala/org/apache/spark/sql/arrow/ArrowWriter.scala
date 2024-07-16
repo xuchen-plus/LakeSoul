@@ -375,7 +375,7 @@ private[arrow] class MapWriter(
     val keys = map.keyArray()
     val values = map.valueArray()
     var i = 0
-    while (i <  map.numElements()) {
+    while (i < map.numElements()) {
       structVector.setIndexDefined(keyWriter.count)
       keyWriter.write(keys, i)
       valueWriter.write(values, i)

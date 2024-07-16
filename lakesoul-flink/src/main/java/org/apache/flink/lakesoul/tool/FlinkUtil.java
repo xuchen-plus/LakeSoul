@@ -7,10 +7,16 @@ package org.apache.flink.lakesoul.tool;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.dmetasoul.lakesoul.lakesoul.io.NativeIOBase;
-import com.dmetasoul.lakesoul.meta.*;
+import com.dmetasoul.lakesoul.meta.DBUtil;
+import com.dmetasoul.lakesoul.meta.DataFileInfo;
+import com.dmetasoul.lakesoul.meta.DataOperation;
+import com.dmetasoul.lakesoul.meta.LakeSoulOptions;
+import com.dmetasoul.lakesoul.meta.MetaVersion;
+import com.dmetasoul.lakesoul.meta.PartitionInfoScala;
 import com.dmetasoul.lakesoul.meta.dao.TableInfoDao;
 import com.dmetasoul.lakesoul.meta.entity.TableInfo;
 import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.core.fs.FileSystem;
@@ -18,8 +24,16 @@ import org.apache.flink.core.fs.Path;
 import org.apache.flink.core.fs.SafetyNetWrapperFileSystem;
 import org.apache.flink.runtime.fs.hdfs.HadoopFileSystem;
 import org.apache.flink.runtime.util.HadoopUtils;
-import org.apache.flink.table.api.*;
+import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.Schema.Builder;
+import org.apache.flink.table.api.SqlDialect;
+import org.apache.flink.table.api.TableColumn;
+import org.apache.flink.table.api.TableEnvironment;
+import org.apache.flink.table.api.TableException;
+import org.apache.flink.table.api.TableSchema;
+import org.apache.flink.table.api.WatermarkSpec;
 import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogTable;
@@ -54,13 +68,19 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatterBuilder;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static java.time.ZoneId.SHORT_IDS;
-import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE;
-import static java.time.format.DateTimeFormatter.ISO_LOCAL_TIME;
+import static java.time.format.DateTimeFormatter.*;
 import static org.apache.flink.lakesoul.tool.JobOptions.*;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.*;
 import static org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM;
@@ -75,7 +95,8 @@ public class FlinkUtil {
         return schema.toRowDataType().toString();
     }
 
-    public static org.apache.arrow.vector.types.pojo.Schema toArrowSchema(RowType rowType, Optional<String> cdcColumn) throws CatalogException {
+    public static org.apache.arrow.vector.types.pojo.Schema toArrowSchema(RowType rowType, Optional<String> cdcColumn)
+            throws CatalogException {
         List<Field> fields = new ArrayList<>();
         String cdcColName = null;
         if (cdcColumn.isPresent()) {
@@ -109,7 +130,9 @@ public class FlinkUtil {
         return new org.apache.arrow.vector.types.pojo.Schema(fields);
     }
 
-    public static org.apache.arrow.vector.types.pojo.Schema toArrowSchema(TableSchema tableSchema, Optional<String> cdcColumn) throws CatalogException {
+    public static org.apache.arrow.vector.types.pojo.Schema toArrowSchema(TableSchema tableSchema,
+                                                                          Optional<String> cdcColumn)
+            throws CatalogException {
         List<Field> fields = new ArrayList<>();
         String cdcColName = null;
         if (cdcColumn.isPresent()) {
@@ -276,7 +299,9 @@ public class FlinkUtil {
 
     public static boolean isView(TableInfo tableInfo) {
         JSONObject jsb = DBUtil.stringToJSON(tableInfo.getProperties());
-        if (jsb.containsKey(LAKESOUL_VIEW.key()) && "true".equals(jsb.getString(LAKESOUL_VIEW.key())) && LAKESOUL_VIEW_KIND.equals(jsb.getString(LAKESOUL_VIEW_TYPE.key()))) {
+        if (jsb.containsKey(LAKESOUL_VIEW.key()) &&
+                "true".equals(jsb.getString(LAKESOUL_VIEW.key())) &&
+                LAKESOUL_VIEW_KIND.equals(jsb.getString(LAKESOUL_VIEW_TYPE.key()))) {
             return true;
         } else {
             return false;
@@ -340,7 +365,8 @@ public class FlinkUtil {
         HashMap<String, String> conf = new HashMap<>();
         properties.forEach((key, value) -> conf.put(key, (String) value));
         if (FlinkUtil.isView(tableInfo)) {
-            return CatalogView.of(bd.build(), "", properties.getString(VIEW_ORIGINAL_QUERY), properties.getString(VIEW_EXPANDED_QUERY), conf);
+            return CatalogView.of(bd.build(), "", properties.getString(VIEW_ORIGINAL_QUERY),
+                    properties.getString(VIEW_EXPANDED_QUERY), conf);
         } else {
             return CatalogTable.of(bd.build(), "", parKeys, conf);
 
@@ -516,8 +542,9 @@ public class FlinkUtil {
         }
     }
 
-    public static Map<Tuple2<String, String>, Map<Integer, List<Path>>> splitDataInfosToRangeAndHashPartition(TableInfo tableInfo,
-                                                                                                              DataFileInfo[] dataFileInfoArray) {
+    public static Map<Tuple2<String, String>, Map<Integer, List<Path>>> splitDataInfosToRangeAndHashPartition(
+            TableInfo tableInfo,
+            DataFileInfo[] dataFileInfoArray) {
         Map<Tuple2<String, String>, Map<Integer, List<Path>>> splitByRangeAndHashPartition = new LinkedHashMap<>();
         for (DataFileInfo dataFileInfo : dataFileInfoArray) {
             if (isExistHashPartition(tableInfo) && dataFileInfo.file_bucket_id() != -1) {
@@ -680,6 +707,7 @@ public class FlinkUtil {
             HadoopFileSystem hfs = fs instanceof HadoopFileSystem ? (HadoopFileSystem) fs
                     : (HadoopFileSystem) ((SafetyNetWrapperFileSystem) fs).getWrappedDelegate();
             org.apache.hadoop.fs.FileSystem hdfs = hfs.getHadoopFileSystem();
+
             LOG.info("Set dir {} permission for {}:{} with flink fs {}, hadoop fs {}", p, userName, domain,
                     hfs.getClass(), hdfs.getClass());
 

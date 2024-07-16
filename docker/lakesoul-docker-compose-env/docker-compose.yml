@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2023 LakeSoul Contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+
 version: '3'
 
 services:
@@ -56,7 +60,7 @@ services:
     profiles: ["s3"]
 
   jobmanager:
-    image: swr.cn-southwest-2.myhuaweicloud.com/dmetasoul-repo/flinkopen:flink-1.17.1-scala_2.12-java8-with-kafka
+    image: flink:1.17.1-scala_2.12-java8
     ports:
       - "8081:8081"
     command: jobmanager
@@ -85,7 +89,7 @@ services:
       - "$HOME/parquet-hadoop-bundle-1.12.3.jar:/opt/flink/lib/parquet-hadoop-bundle-1.12.3.jar"
 
   taskmanager:
-    image: swr.cn-southwest-2.myhuaweicloud.com/dmetasoul-repo/flinkopen:flink-1.17.1-scala_2.12-java8-with-kafka
+    image: flink:1.17.1-scala_2.12-java8
     depends_on:
       - jobmanager
     command: taskmanager

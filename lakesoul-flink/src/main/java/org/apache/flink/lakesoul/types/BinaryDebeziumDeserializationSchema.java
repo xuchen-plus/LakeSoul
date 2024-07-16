@@ -28,6 +28,7 @@ public class BinaryDebeziumDeserializationSchema implements DebeziumDeserializat
 
     @Override
     public TypeInformation<BinarySourceRecord> getProducedType() {
-        return TypeInformation.of(new TypeHint<BinarySourceRecord>() {});
+        return TypeInformation.of(new TypeHint<BinarySourceRecord>() {
+        });
     }
 }

@@ -10,7 +10,6 @@ import com.dmetasoul.lakesoul.meta.DBUtil;
 import com.dmetasoul.lakesoul.meta.entity.TableInfo;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.flink.lakesoul.metadata.LakeSoulCatalog;
-import org.apache.flink.lakesoul.tool.FlinkUtil;
 import org.apache.flink.table.runtime.arrow.ArrowUtils;
 import org.apache.flink.table.types.logical.RowType;
 
