@@ -25,6 +25,7 @@ SPDX-License-Identifier: Apache-2.0
         <cdc.version>3.0.0</cdc.version>
         <kafka.avro.version>7.6.0</kafka.avro.version>
         <schema.registry.version>7.6.0</schema.registry.version>
+        <local.scope>provided</local.scope>
     </properties>
 
     <repositories>
@@ -146,7 +147,6 @@ SPDX-License-Identifier: Apache-2.0
             <scope>test</scope>
             <type>test-jar</type>
         </dependency>
-
         <dependency>
             <groupId>com.ververica</groupId>
             <artifactId>flink-sql-connector-sqlserver-cdc</artifactId>
@@ -243,6 +243,16 @@ SPDX-License-Identifier: Apache-2.0
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-connector-kafka</artifactId>
             <version>${flink.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-avro-confluent-registry</artifactId>
+            <version>1.19.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-avro</artifactId>
+            <version>1.19.0</version>
         </dependency>
         <dependency>
             <groupId>io.confluent</groupId>
