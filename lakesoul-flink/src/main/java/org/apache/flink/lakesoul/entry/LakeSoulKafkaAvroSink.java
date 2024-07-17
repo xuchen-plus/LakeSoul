@@ -142,8 +142,6 @@ public class LakeSoulKafkaAvroSink {
         conf.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
 
          StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
-//        conf.set(RestOptions.PORT, 8181);
-//        StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(conf);
         ParameterTool pt = ParameterTool.fromMap(conf.toMap());
         env.getConfig().setGlobalJobParameters(pt);
         env.enableCheckpointing(checkpointInterval);
@@ -243,7 +241,6 @@ public class LakeSoulKafkaAvroSink {
                                                 props);
                                 RowDataToAvroConverter valueConverter = RowDataToAvroConverters.createConverter(kafkaAvroType, false);
                                 GenericRecord valueGenericRecord = (GenericRecord) valueConverter.convert(AvroSchemaConverter.convertToSchema(kafkaAvroType, false), kafkaRowData);
-                                System.out.println(valueGenericRecord.toString());
                                 byte[] valueBytes = genericRecordConfluentRegistryAvroSerializationSchema.serialize(valueGenericRecord);
 
                                 long hash = 42;
