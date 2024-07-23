@@ -359,7 +359,7 @@ SPDX-License-Identifier: Apache-2.0
                                 </goals>
                                 <configuration>
                                     <executable>cargo</executable>
-                                    <commandlineArgs>+nightly-x86_64-apple-darwin build --release --all-features --package lakesoul-io-c
+                                    <commandlineArgs>build --release --all-features --package lakesoul-io-c
                                     </commandlineArgs>
                                     <workingDirectory>${basedir}/../../rust/</workingDirectory>
                                 </configuration>

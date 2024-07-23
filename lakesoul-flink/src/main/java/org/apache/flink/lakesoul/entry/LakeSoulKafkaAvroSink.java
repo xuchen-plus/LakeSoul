@@ -17,10 +17,8 @@ import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.tuple.Tuple4;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.configuration.RestOptions;
 import org.apache.flink.connector.base.DeliveryGuarantee;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
-import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.formats.avro.RowDataToAvroConverters;
 import org.apache.flink.formats.avro.RowDataToAvroConverters.RowDataToAvroConverter;
 import org.apache.flink.formats.avro.registry.confluent.ConfluentRegistryAvroSerializationSchema;
@@ -38,7 +36,6 @@ import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.CheckpointConfig;
 import org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.RowData.FieldGetter;
@@ -219,9 +216,7 @@ public class LakeSoulKafkaAvroSink {
                         lakeSoulArrowWrapper.withDecoded(ArrowUtils.getRootAllocator(), (tableInfo, recordBatch) -> {
                             ArrowReader arrowReader = ArrowUtils.createArrowReader(recordBatch, rowType);
                             int i = 0;
-                            System.out.println(recordBatch.getRowCount());
                             while (i < recordBatch.getRowCount()) {
-                                System.out.println(i);
                                 RowData rowData = arrowReader.read(i);
                                 RowData kafkaRowData = toKafkaAvroRawData(rowData, rowType, String.format("%s.%s", lakeSoulDBName, lakeSoulTableName));
 
@@ -258,7 +253,7 @@ public class LakeSoulKafkaAvroSink {
                             }
                         });
                     }
-                });//.setParallelism(sourceParallelism);
+                }).setParallelism(sourceParallelism);
 
         sinkKafkaRecordSingleOutputStreamOperator.sinkTo(kafkaSink).setParallelism(sinkParallelism);
         env.execute("LakeSoul CDC Sink From Kafka topic " + kafkaTopic);
@@ -355,14 +350,5 @@ public class LakeSoulKafkaAvroSink {
         kafkaRowData.setField(kafkaRowData.getArity() - 2, StringData.fromString(table));
         kafkaRowData.setField(kafkaRowData.getArity() - 1, StringData.fromString(String.valueOf(System.currentTimeMillis())));
         return kafkaRowData;
-    }
-
-    public static LogicalType[] convert(RowType rowType) {
-        LogicalType[] fieldTypes = new LogicalType[rowType.getFieldCount()];
-        for (int i = 0; i < rowType.getFieldCount(); i++) {
-            // 假设使用Flink内置的DataTypes进行类型映射，实际应用中可能需要自定义映射
-            fieldTypes[i] = DataTypes.of(rowType.getTypeAt(i)).getLogicalType();
-        }
-        return fieldTypes;
     }
 }
