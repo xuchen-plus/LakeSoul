@@ -15,11 +15,17 @@ public class LakeSoulKafkaSinkOptions extends LakeSoulSinkOptions{
             .noDefaultValue()
             .withDescription("source kafka bootstrap servers");
 
+    public static final ConfigOption<String> CLIENT_ID = ConfigOptions
+            .key("client_id")
+            .stringType()
+            .noDefaultValue()
+            .withDescription("Source/Sink kafka Client ID");
+
     public static final ConfigOption<String> GROUP_ID = ConfigOptions
             .key("group_id")
             .stringType()
             .noDefaultValue()
-            .withDescription("source kafka group ID");
+            .withDescription("Source/Sink kafka group ID");
 
     public static final ConfigOption<String> TOPIC = ConfigOptions
             .key("topic")

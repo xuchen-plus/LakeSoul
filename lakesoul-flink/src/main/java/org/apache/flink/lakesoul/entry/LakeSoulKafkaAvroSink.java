@@ -70,6 +70,7 @@ public class LakeSoulKafkaAvroSink {
         ParameterTool parameter = ParameterTool.fromArgs(args);
         String kafkaServers = parameter.get(BOOTSTRAP_SERVERS.key());
         String kafkaTopic = parameter.get(TOPIC.key());
+        String clientID = parameter.get(CLIENT_ID.key());
         String topicGroupID = parameter.get(GROUP_ID.key());
 
         String lakeSoulDBName = parameter.get(DBNAME.key());
@@ -95,6 +96,7 @@ public class LakeSoulKafkaAvroSink {
         Properties pro = new Properties();
         pro.put("bootstrap.servers", kafkaServers);
         pro.put("group.id", topicGroupID);
+        pro.put("client.id", clientID);
         pro.put("max.poll.records", maxPollRecords);
         pro.put("retries", 3);
         pro.put("transaction.timeout.ms", "60000");
