@@ -47,6 +47,7 @@ import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.Collector;
+import org.apache.kafka.clients.producer.ProducerConfig;
 
 import java.io.IOException;
 import java.util.*;
@@ -95,9 +96,7 @@ public class LakeSoulKafkaAvroSink {
 
         Properties pro = new Properties();
         pro.put("bootstrap.servers", kafkaServers);
-        pro.put("group.id", topicGroupID);
         pro.put("client.id", clientID);
-        pro.put("max.poll.records", maxPollRecords);
         pro.put("retries", 3);
         pro.put("transaction.timeout.ms", "60000");
 
@@ -180,7 +179,8 @@ public class LakeSoulKafkaAvroSink {
         KafkaSink<Tuple3<byte[], byte[], Long>> kafkaSink = KafkaSink.<Tuple3<byte[], byte[], Long>>builder()
                 .setBootstrapServers(kafkaServers)
                 .setRecordSerializer(new LakeSoulDynamicKafkaRecordSerializationSchema(kafkaTopic, new LakSoulKafkaPartitioner<>()))
-                .setDeliveryGuarantee(DeliveryGuarantee.EXACTLY_ONCE)
+                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+//                .setTransactionalIdPrefix(String.format("trx-%s-", kafkaTopic))
                 .setKafkaProducerConfig(pro)
                 .build();
 

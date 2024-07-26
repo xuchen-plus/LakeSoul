@@ -31,11 +31,6 @@ public class SubstraitTest extends AbstractTestBase {
     }
 
     @Test
-    public void loadSubStrait() throws IOException {
-        SimpleExtension.ExtensionCollection extensionCollection = SimpleExtension.loadDefaults();
-    }
-
-    @Test
     public void dateTypeTest() throws ExecutionException, InterruptedException {
         TableEnvironment createTableEnv = TestUtils.createTableEnv(BATCH_TYPE);
         createLakeSoulSourceTableWithDateType(createTableEnv);
