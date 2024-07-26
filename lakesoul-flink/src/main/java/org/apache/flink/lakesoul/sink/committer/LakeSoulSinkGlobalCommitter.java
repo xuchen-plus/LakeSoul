@@ -139,6 +139,9 @@ public class LakeSoulSinkGlobalCommitter
             TableInfo tableInfo = dbManager.getTableInfoByNameAndNamespace(tableName, tableNamespace);
             LOG.info("Committing: {}, {}, {}, {} {}", tableNamespace, tableName, isCdc, msgSchema, tableInfo);
             if (tableInfo == null) {
+                if (dbManager.getNamespaceByNamespace(tableNamespace) == null) {
+                    dbManager.createNewNamespace(tableNamespace, new JSONObject().toJSONString(), "");
+                }
                 String tableId = TABLE_ID_PREFIX + UUID.randomUUID();
                 String partition = DBUtil.formatTableInfoPartitionsField(identity.primaryKeys,
                         identity.partitionKeyList);
