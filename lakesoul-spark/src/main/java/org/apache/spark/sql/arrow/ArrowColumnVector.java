@@ -130,7 +130,7 @@ public class ArrowColumnVector extends ColumnVector {
     }
 
     public ArrowColumnVector(ValueVector vector) {
-        this(ArrowUtils.fromArrowField(vector.getField()));
+        this(ArrowUtils.sparkTypeFromArrowField(vector.getField()));
         initAccessor(vector);
     }
 
