@@ -56,7 +56,8 @@ use super::file_format::LakeSoulMetaDataParquetFormat;
 ///
 /// ```
 pub struct LakeSoulTableProvider {
-    listing_table: Arc<ListingTable>,
+    listing_options: ListingOptions,
+    listing_table_paths: Vec<ListingTableUrl>,
     client: MetaDataClientRef,
     table_info: Arc<TableInfo>,
     table_schema: SchemaRef,
@@ -77,6 +78,7 @@ impl LakeSoulTableProvider {
         let (range_partitions, hash_partitions) = parse_table_info_partitions(table_info.partitions.clone())?;
         let mut range_partition_projection = Vec::with_capacity(range_partitions.len());
         let mut file_schema_projection = Vec::with_capacity(table_schema.fields().len() - range_partitions.len());
+        // O(nm), n = number of table fields, m = number of range partitions
         for (idx, field) in table_schema.fields().iter().enumerate() {
             match range_partitions.contains(field.name()) {
                 false => file_schema_projection.push(idx),
@@ -102,8 +104,11 @@ impl LakeSoulTableProvider {
             listing_table_from_lakesoul_io_config(session_state, lakesoul_io_config.clone(), file_format, as_sink)
                 .await?;
 
+        let listing_options = listing_table.options().clone();
+        let listing_table_paths = listing_table.table_paths().clone();
         Ok(Self {
-            listing_table,
+            listing_options,
+            listing_table_paths,
             client,
             table_info,
             table_schema,
@@ -138,6 +143,7 @@ impl LakeSoulTableProvider {
     }
 
     fn is_partition_filter(&self, f: &Expr) -> bool {
+        // O(nm), n = number of expr fields, m = number of range partitions
         if let Ok(cols) = f.to_columns() {
             cols.iter().all(|col| self.range_partitions.contains(&col.name))
         } else {
@@ -146,11 +152,11 @@ impl LakeSoulTableProvider {
     }
 
     pub fn options(&self) -> &ListingOptions {
-        self.listing_table.options()
+        &self.listing_options
     }
 
     pub fn table_paths(&self) -> &Vec<ListingTableUrl> {
-        self.listing_table.table_paths()
+        &self.listing_table_paths
     }
 
     pub fn file_schema(&self) -> SchemaRef {
@@ -298,8 +304,8 @@ impl TableProvider for LakeSoulTableProvider {
         }
 
         // extract types of partition columns
+        // O(nm), n = number of partitions, m = number of columns
         let table_partition_cols = self
-            .listing_table
             .options()
             .table_partition_cols
             .iter()
@@ -315,23 +321,23 @@ impl TableProvider for LakeSoulTableProvider {
             None
         };
 
-        let object_store_url = if let Some(url) = self.listing_table.table_paths().first() {
+        let object_store_url = if let Some(url) = self.table_paths().first() {
             url.object_store()
         } else {
             return Ok(Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))));
         };
 
         // create the execution plan
-        self.listing_table
-            .options()
+        self.options()
             .format
             .create_physical_plan(
                 state,
                 FileScanConfig {
                     object_store_url,
-                    file_schema: Arc::clone(&self.file_schema()),
+                    file_schema: self.schema(),
                     file_groups: partitioned_file_lists,
                     statistics: Statistics::new_unknown(self.schema().deref()),
+                    // projection for Table instead of File
                     projection: projection.cloned(),
                     limit,
                     output_ordering: self.try_create_output_ordering()?,
@@ -362,7 +368,7 @@ impl TableProvider for LakeSoulTableProvider {
         input: Arc<dyn ExecutionPlan>,
         overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let table_path = &self.listing_table.table_paths()[0];
+        let table_path = &self.table_paths()[0];
         // Get the object store for the table path.
         let _store = state.runtime_env().object_store(table_path)?;
 

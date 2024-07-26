@@ -33,6 +33,7 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.junit.Test;
 
+import java.io.IOException;
 import java.util.*;
 
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkOptions.INFERRING_SCHEMA;
