@@ -72,7 +72,6 @@ public class LakeSoulKafkaAvroSink {
         String kafkaServers = parameter.get(BOOTSTRAP_SERVERS.key());
         String kafkaTopic = parameter.get(TOPIC.key());
         String clientID = parameter.get(CLIENT_ID.key());
-        String topicGroupID = parameter.get(GROUP_ID.key());
 
         String lakeSoulDBName = parameter.get(DBNAME.key());
         String lakeSoulTableName = parameter.get(TABLE_NAME.key());
@@ -83,7 +82,6 @@ public class LakeSoulKafkaAvroSink {
                 JOB_CHECKPOINT_INTERVAL.defaultValue());
         String serverTimezone = parameter.get(SERVER_TIME_ZONE.key(), SERVER_TIME_ZONE.defaultValue());
         String schemaRegistryUrl = parameter.get(SCHEMA_REGISTRY_URL.key(), SCHEMA_REGISTRY_URL.defaultValue());
-        int maxPollRecords = parameter.getInt(MAX_POLL_RECORDS.key(), MAX_POLL_RECORDS.defaultValue());
 
         //about security
         String securityProtocol = parameter.get(SECURITY_PROTOCOL.key());
