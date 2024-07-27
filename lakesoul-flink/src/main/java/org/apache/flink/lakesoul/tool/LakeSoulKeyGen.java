@@ -99,7 +99,7 @@ public class LakeSoulKeyGen implements Serializable {
       case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
         TimestampData td = (TimestampData) field;
         long longValue = td.getMillisecond() * 1000000 + td.getNanoOfMillisecond();
-        seed = Murmur3HashFunction.hash(longValue, IntegerType, seed);
+        seed = Murmur3HashFunction.hash(longValue, LongType, seed);
         break;	
       default:
         throw new RuntimeException("not support this partition type now :" + type.getTypeRoot().toString());

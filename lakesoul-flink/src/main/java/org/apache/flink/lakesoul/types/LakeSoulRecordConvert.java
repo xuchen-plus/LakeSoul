@@ -732,7 +732,7 @@ public class LakeSoulRecordConvert implements Serializable {
         } else if (dbzObj instanceof java.util.Date) {
             java.util.Date date = (java.util.Date)dbzObj;
             long timestamp = date.toInstant().toEpochMilli();
-            Instant instant = TimestampData.fromEpochMillis( timestamp).toInstant();
+            Instant instant = TimestampData.fromEpochMillis(timestamp).toInstant();
             return TimestampData.fromInstant(instant);
         }
         // fallback to zoned timestamp

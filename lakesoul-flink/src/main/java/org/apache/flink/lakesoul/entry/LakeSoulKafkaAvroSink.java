@@ -225,7 +225,7 @@ public class LakeSoulKafkaAvroSink {
                                 byte[] keyBytes = null;
                                 if (keySerialization != null ) {
                                     GenericRecord keyGenericRecord = (GenericRecord) keyRowDataToAvroConverter.convert(
-                                            AvroSchemaConverter.convertToSchema(keyRowType),
+                                            AvroSchemaConverter.convertToSchema(keyRowType, false),
                                             createProjectedRow(rowData, RowKind.INSERT, keyFieldGetters));
                                     keyBytes = keySerialization.serialize(keyGenericRecord);
                                 }
@@ -258,7 +258,7 @@ public class LakeSoulKafkaAvroSink {
                 }).setParallelism(sourceParallelism);
 
         sinkKafkaRecordSingleOutputStreamOperator.sinkTo(kafkaSink).setParallelism(sinkParallelism);
-        env.execute("LakeSoul CDC Sink From Kafka topic " + kafkaTopic);
+        env.execute("LakeSoul CDC Sink to Kafka topic " + kafkaTopic);
     }
 
     public static Tuple4<ConfluentRegistryAvroSerializationSchema, RowDataToAvroConverter, RowType, RowData.FieldGetter[]> getKeyInfo(String dbName,
@@ -295,10 +295,10 @@ public class LakeSoulKafkaAvroSink {
                     genericRecordConfluentRegistryAvroSerializationSchema =
                     ConfluentRegistryAvroSerializationSchema.forGeneric(
                             String.format("%s-key", topic),
-                            AvroSchemaConverter.convertToSchema(keyRowType),
+                            AvroSchemaConverter.convertToSchema(keyRowType, false),
                             schemaRegistryUrl,
                             kafkaConfigs);
-            RowDataToAvroConverter keyRowDataToAvroConverter = RowDataToAvroConverters.createConverter(keyRowType);
+            RowDataToAvroConverter keyRowDataToAvroConverter = RowDataToAvroConverters.createConverter(keyRowType, false);
             return new Tuple4<>(genericRecordConfluentRegistryAvroSerializationSchema, keyRowDataToAvroConverter, keyRowType, keyFieldGetters);
         }
         return null;

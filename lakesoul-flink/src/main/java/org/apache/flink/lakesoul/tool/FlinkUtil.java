@@ -210,6 +210,8 @@ public class FlinkUtil {
             case "xml":
                 return new BinaryType(nullable, Integer.MAX_VALUE);
             case "bigint":
+            case "long_range":
+            case "date_range":
                 if (unsigned) {
                     return new VarCharType(nullable, Integer.MAX_VALUE);
                 } else {
@@ -222,9 +224,11 @@ public class FlinkUtil {
             case "tinyint":
             case "smallint":
             case "year":
+            case "integer_range":
                 return new IntType(nullable);
             case "float":
             case "binary_float":
+            case "float_range":
                 if (unsigned) {
                     return new DoubleType(nullable);
                 } else {
@@ -236,6 +240,9 @@ public class FlinkUtil {
             case "money":
             case "smallmoney":
             case "binary_double":
+            case "half_float":
+            case "scaled_float":
+            case "double_range":
                 if (unsigned) {
                     return new VarCharType(nullable, Integer.MAX_VALUE);
                 } else {
@@ -271,6 +278,7 @@ public class FlinkUtil {
             case "enum":
             case "uniqueidentifier":
             case "sql_variant":
+            case "keyword":
             default:
                 return new VarCharType(nullable, Integer.MAX_VALUE);
         }
