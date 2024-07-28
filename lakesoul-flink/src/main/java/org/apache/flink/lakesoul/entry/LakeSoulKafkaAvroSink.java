@@ -245,7 +245,7 @@ public class LakeSoulKafkaAvroSink {
                                     LogicalType type = rowType.getTypeAt(typeIndex);
                                     Object fieldOrNull = RowData.createFieldGetter(type, typeIndex)
                                             .getFieldOrNull(rowData);
-                                    hash = LakeSoulKeyGen.getHash(type, fieldOrNull, hash);
+                                    hash = Math.abs(LakeSoulKeyGen.getHash(type, fieldOrNull, hash));
                                 }
 
                                 collector.collect(new Tuple3<>(keyBytes, valueBytes, hash));
