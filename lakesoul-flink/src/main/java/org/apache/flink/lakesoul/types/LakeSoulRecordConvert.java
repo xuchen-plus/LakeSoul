@@ -1155,7 +1155,7 @@ public class LakeSoulRecordConvert implements Serializable {
                 boolean unsigned = false;
 
                 JsonNode typeDefine = node.get("type").get(1);
-		String colType;
+		        String colType;
                 int precision = 0;
                 int scale = 0;
                 JsonNode parametersNode = typeDefine.get("connect.parameters");
