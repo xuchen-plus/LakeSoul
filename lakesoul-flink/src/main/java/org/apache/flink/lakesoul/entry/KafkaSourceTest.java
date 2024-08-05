@@ -57,7 +57,7 @@ public class KafkaSourceTest {
 
         LakeSoulMultiTableSinkStreamBuilder.Context context = new LakeSoulMultiTableSinkStreamBuilder.Context();
         context.env = env;
-        context.conf = conf;
+        context.conf = (Configuration) env.getConfiguration();
         LakeSoulMultiTableSinkStreamBuilder builder = new LakeSoulMultiTableSinkStreamBuilder(source, context, lakeSoulRecordConvert);
         DataStreamSource<BinarySourceRecord> sourceA = builder.buildMultiTableSource("Kafka Source");
 //
