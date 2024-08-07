@@ -27,7 +27,7 @@ SPDX-License-Identifier: Apache-2.0
         <maven.compiler.target>8</maven.compiler.target>
         <arrow.version>12.0.0</arrow.version>
         <scalatest.version>3.1.0</scalatest.version>
-        <substrait.version>0.28.0</substrait.version>
+        <substrait.version>0.30.0</substrait.version>
         <protobuf.version>3.22.0</protobuf.version>
         <protobuf.plugin.version>0.6.1</protobuf.plugin.version>
     </properties>
@@ -590,6 +590,9 @@ SPDX-License-Identifier: Apache-2.0
                         <includes>
                             <include>**</include>
                         </includes>
+                        <excludes>
+                            <exclude>org.apache.spark:*</exclude>
+                        </excludes>
                     </artifactSet>
                     <filters>
                         <filter>
@@ -604,7 +607,11 @@ SPDX-License-Identifier: Apache-2.0
                         <filter>
                             <artifact>org.apache.arrow:arrow-c-data</artifact>
                             <excludes>
-                                <exclude>org/apache/arrow/c/jni/JniLoader.class</exclude>
+                                <exclude>org/sparkproject/jetty/**</exclude>
+                                <exclude>META-INF/maven/org.eclipse.jetty/**</exclude>
+                                <exclude>META-INF/maven/org.spark-project.spark/**</exclude>
+                                <exclude>jetty-dir.css</exclude>
+                                <exclude>META-INF/services/org.eclipse.jetty.http.HttpFieldPreEncoder</exclude>
                             </excludes>
                         </filter>
                         <filter>
@@ -672,6 +679,30 @@ SPDX-License-Identifier: Apache-2.0
                         <relocation>
                             <pattern>org.antlr</pattern>
                             <shadedPattern>com.lakesoul.shaded.org.antlr</shadedPattern>
+                        </relocation>
+                        <relocation>
+                            <pattern>io.netty</pattern>
+                            <shadedPattern>com.lakesoul.shaded.io.netty</shadedPattern>
+                        </relocation>
+                        <relocation>
+                            <pattern>com.alibaba.fastjson</pattern>
+                            <shadedPattern>com.lakesoul.shaded.com.alibaba.fastjson</shadedPattern>
+                        </relocation>
+                        <relocation>
+                            <pattern>com.google.flatbuffers</pattern>
+                            <shadedPattern>com.lakesoul.shaded.com.google.flatbuffers</shadedPattern>
+                        </relocation>
+                        <relocation>
+                            <pattern>io.substrait</pattern>
+                            <shadedPattern>com.lakesoul.shaded.io.substrait</shadedPattern>
+                        </relocation>
+                        <relocation>
+                            <pattern>org.stringtemplate</pattern>
+                            <shadedPattern>com.lakesoul.shaded.org.stringtemplate</shadedPattern>
+                        </relocation>
+                        <relocation>
+                            <pattern>org.abego</pattern>
+                            <shadedPattern>com.lakesoul.shaded.org.abego</shadedPattern>
                         </relocation>
                     </relocations>
                 </configuration>
