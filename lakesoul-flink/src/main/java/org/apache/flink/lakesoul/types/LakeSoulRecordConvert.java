@@ -4,7 +4,6 @@
 
 package org.apache.flink.lakesoul.types;
 
-import com.amazonaws.services.dynamodbv2.xspec.S;
 import com.ververica.cdc.connectors.mongodb.internal.MongoDBEnvelope;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Decimal;
 import com.ververica.cdc.connectors.shaded.org.apache.kafka.connect.data.Field;

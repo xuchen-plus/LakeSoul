@@ -72,9 +72,17 @@ public class BinarySourceRecord {
 
     public static BinarySourceRecord fromMysqlSourceRecord(SourceRecord sourceRecord,
                                                            LakeSoulRecordConvert convert,
-                                                           String basePath) throws Exception {
+                                                           String basePath,
+                                                           String sinkDBName) throws Exception {
         Schema keySchema = sourceRecord.keySchema();
         TableId tableId = new TableId(io.debezium.relational.TableId.parse(sourceRecord.topic()).toLowercase());
+        if (StringUtils.isNotBlank(sinkDBName)) {
+            String realTable = String.format("s_%s_%s", tableId.schema() == null ? tableId.catalog() : tableId.schema(), tableId.table());
+            tableId = new TableId(sinkDBName, sinkDBName, realTable);
+        } else {
+            String realTable = String.format("s_%s_%s", tableId.schema() == null ? tableId.catalog() : tableId.schema(), tableId.table());
+            tableId = new TableId(tableId.catalog(), tableId.schema(), realTable);
+        }
         boolean isDDL = "io.debezium.connector.mysql.SchemaChangeKey".equalsIgnoreCase(keySchema.name());
         if (isDDL) {
             return null;
@@ -109,7 +117,7 @@ public class BinarySourceRecord {
             String tablePath;
             if (tableId.schema() == null){
                 tablePath = new Path(new Path(basePath, tableId.catalog()), tableId.table()).toString();
-            }else {
+            } else {
                 tablePath = new Path(new Path(basePath, tableId.schema()), tableId.table()).toString();
             }
             return new BinarySourceRecord(sourceRecord.topic(), primaryKeys, tableId, FlinkUtil.makeQualifiedPath(tablePath).toString(),
