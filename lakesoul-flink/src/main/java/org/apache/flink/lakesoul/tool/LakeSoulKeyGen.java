@@ -59,7 +59,6 @@ public class LakeSoulKeyGen implements Serializable {
     }
 
     public static long getHash(LogicalType type, Object field, long seed) {
-
         switch (type.getTypeRoot()) {
             case CHAR:
             case VARCHAR:
