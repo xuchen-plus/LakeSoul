@@ -40,9 +40,9 @@ import org.apache.flink.table.catalog.stats.CatalogTableStatistics;
 import org.apache.flink.table.expressions.CallExpression;
 import org.apache.flink.table.expressions.Expression;
 import org.apache.flink.table.factories.Factory;
+import org.apache.flink.table.types.logical.LocalZonedTimestampType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.TimestampType;
-import org.apache.flink.table.types.logical.ZonedTimestampType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -326,6 +326,7 @@ public class LakeSoulCatalog implements Catalog {
                 }
             }
             try {
+                path = new Path(path).toString();
                 FileSystem fileSystem = new Path(path).getFileSystem();
                 Path qp = new Path(path).makeQualified(fileSystem);
                 FlinkUtil.createAndSetTableDirPermission(qp, false);
@@ -613,6 +614,13 @@ public class LakeSoulCatalog implements Catalog {
                 throw new CatalogException("LakeSoul does not support column `" +
                         tableColumn.getName() +
                         "` with timestamp precision > 6");
+            }
+        } else if (tableColumn.getType().getLogicalType() instanceof LocalZonedTimestampType) {
+            LocalZonedTimestampType localZonedTimestampType = (LocalZonedTimestampType) tableColumn.getType().getLogicalType();
+            if (localZonedTimestampType.getPrecision() > 6) {
+                throw new CatalogException("LakeSoul does not support column `" +
+                        tableColumn.getName() +
+                        "` with timestamp_ltz precision > 6");
             }
         }
     }
