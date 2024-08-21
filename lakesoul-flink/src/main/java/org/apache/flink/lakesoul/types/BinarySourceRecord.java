@@ -19,10 +19,7 @@ import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMap
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
+import java.util.*;
 
 public class BinarySourceRecord {
 
@@ -76,13 +73,10 @@ public class BinarySourceRecord {
                                                            String sinkDBName) throws Exception {
         Schema keySchema = sourceRecord.keySchema();
         TableId tableId = new TableId(io.debezium.relational.TableId.parse(sourceRecord.topic()).toLowercase());
-        if (StringUtils.isNotBlank(sinkDBName)) {
-            String realTable = String.format("s_%s_%s", tableId.schema() == null ? tableId.catalog() : tableId.schema(), tableId.table());
-            tableId = new TableId(sinkDBName, sinkDBName, realTable);
-        } else {
-            String realTable = String.format("s_%s_%s", tableId.schema() == null ? tableId.catalog() : tableId.schema(), tableId.table());
-            tableId = new TableId(tableId.catalog(), tableId.schema(), realTable);
-        }
+        String originalNamespace = tableId.schema() == null ? tableId.catalog() : tableId.schema();
+        String newNamespace = StringUtils.isNotBlank(sinkDBName) ? sinkDBName : originalNamespace;
+        String tableName = String.format("s_%s_%s", originalNamespace, tableId.table()).toLowerCase();
+        tableId = new TableId(newNamespace, newNamespace , tableName);
         boolean isDDL = "io.debezium.connector.mysql.SchemaChangeKey".equalsIgnoreCase(keySchema.name());
         if (isDDL) {
             return null;
