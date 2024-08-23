@@ -136,23 +136,17 @@ public class BinarySourceRecord {
         int partition = consumerRecord.partition();
         long offset = consumerRecord.offset();
 
-        JsonNode keyNode = objectMapper.readTree((byte[]) consumerRecord.key());
-        JsonNode valueNode = objectMapper.readTree((byte[]) consumerRecord.value());
-
+        Object dataKey = consumerRecord.key();
         List<String> keyList = new ArrayList<>();
-//        JsonNode primaryKeys = keyNode.get("primary_keys");
-//        if (primaryKeys.isArray()) {
-//            Iterator<JsonNode> elements = primaryKeys.elements();
-//            while (elements.hasNext()){
-//                keyList.add(elements.next().asText());
-//            }
-//        }
-//        JsonNode pkValue = keyNode.get("pk_value");
-        Iterator<String> pkIterator = keyNode.fieldNames();
-        while (pkIterator.hasNext()) {
-            String keyName = pkIterator.next();
-            keyList.add(keyName);
+        if (dataKey != null) {
+            JsonNode keyNode = objectMapper.readTree((byte[]) dataKey);
+            Iterator<String> pkIterator = keyNode.fieldNames();
+            while (pkIterator.hasNext()) {
+                String keyName = pkIterator.next();
+                keyList.add(keyName);
+            }
         }
+        JsonNode valueNode = objectMapper.readTree((byte[]) consumerRecord.value());
 
         JsonNode source = valueNode.get("source");
         String databaseName = source.get("db").asText();
@@ -200,16 +194,17 @@ public class BinarySourceRecord {
         long offset = consumerRecord.offset();
         org.apache.avro.Schema valueSchema = valueRecord.getSchema();
 
-        JsonNode keyNode = objectMapper.readTree(keyRecord.toString());
+        List<String> keyList = new ArrayList<>();
+        if (keyRecord != null) {
+            JsonNode keyNode = objectMapper.readTree(keyRecord.toString());
+            Iterator<String> pkIterator = keyNode.fieldNames();
+            while (pkIterator.hasNext()) {
+                String keyName = pkIterator.next();
+                keyList.add(keyName);
+            }
+        }
         JsonNode valueSchemaNode = objectMapper.readTree(valueSchema.toString()).get("fields");
         JsonNode valueNode = objectMapper.readTree(valueRecord.toString());
-
-        List<String> keyList = new ArrayList<>();
-        Iterator<String> pkIterator = keyNode.fieldNames();
-        while (pkIterator.hasNext()) {
-            String keyName = pkIterator.next();
-            keyList.add(keyName);
-        }
 
         String opType = valueNode.get("op_type").asText();
         ((ObjectNode) valueNode).remove("op_type");

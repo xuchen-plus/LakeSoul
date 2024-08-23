@@ -81,6 +81,7 @@ public class KafkaCdc {
         boolean regularTopicName = parameter.getBoolean(REGULAR_TOPIC_NAME.key(), REGULAR_TOPIC_NAME.defaultValue());
         boolean kafkaDataAvroType = parameter.getBoolean(KAFKA_DATA_AVRO_TYPE.key(), KAFKA_DATA_AVRO_TYPE.defaultValue());
         String dbName = parameter.get(DBNAME.key(), DBNAME.defaultValue());
+        boolean useCdc = parameter.getBoolean(USE_CDC.key(), true);
 
         //about security
         String securityProtocol = parameter.get(SECURITY_PROTOCOL.key());
@@ -155,7 +156,7 @@ public class KafkaCdc {
 
         Configuration conf = new Configuration();
         // parameters for mutil tables dml sink
-        conf.set(LakeSoulSinkOptions.USE_CDC, true);
+        conf.set(LakeSoulSinkOptions.USE_CDC, useCdc);
         conf.set(LakeSoulSinkOptions.isMultiTableSource, true);
         conf.set(LakeSoulSinkOptions.WAREHOUSE_PATH, databasePrefixPath);
         conf.set(LakeSoulSinkOptions.SOURCE_PARALLELISM, sourceParallelism);

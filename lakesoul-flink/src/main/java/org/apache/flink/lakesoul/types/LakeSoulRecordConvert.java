@@ -935,7 +935,7 @@ public class LakeSoulRecordConvert implements Serializable {
                         .setAfterRowData(afterRowData).setAfterType(afterRowType);
             }
         }
-        return builder.setTsMs(tsMs).build();
+        return builder.setUseCDC(useCDC).setTsMs(tsMs).build();
     }
 
     public LakeSoulRowDataWrapper kafkaAvroToLakeSoulDataType(JsonNode node, JsonNode nodeSchema, String opType,
@@ -989,7 +989,7 @@ public class LakeSoulRecordConvert implements Serializable {
 //                        .setAfterRowData(afterRowData).setAfterType(afterRowType);
 //            }
         }
-        return builder.setTsMs(tsMs).build();
+        return builder.setUseCDC(useCDC).setTsMs(tsMs).build();
     }
 
     private String getOPType(String opType) {
