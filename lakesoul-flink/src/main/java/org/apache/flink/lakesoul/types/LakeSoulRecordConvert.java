@@ -132,7 +132,7 @@ public class LakeSoulRecordConvert implements Serializable {
         return false;
     }
 
-    public LakeSoulRowDataWrapper toLakeSoulDataType(Schema sch, Struct value, TableId tableId, long tsMs, long sortField) throws Exception {
+    public LakeSoulRowDataWrapper toLakeSoulDataType(List<String> primaryKeys, Schema sch, Struct value, TableId tableId, long tsMs, long sortField) throws Exception {
         LakeSoulRowDataWrapper.Builder builder = LakeSoulRowDataWrapper.newBuilder().setTableId(tableId)
                 .setUseCDC(useCDC).setCDCColumn(cdcColumn);
         boolean isMongoDDL = true;
@@ -148,7 +148,7 @@ public class LakeSoulRecordConvert implements Serializable {
                 Struct bsonStruct = convertBSONToStruct(fullDocument);
                 Schema documentSchema = bsonStruct.schema();
                 RowData insert = convert(bsonStruct, documentSchema, RowKind.INSERT, sortField);
-                RowType mongoRt = toFlinkRowType(documentSchema,true);
+                RowType mongoRt = toFlinkRowType(documentSchema, primaryKeys, true);
                 insert.setRowKind(RowKind.INSERT);
                 builder.setOperation("insert").setAfterRowData(insert).setAfterType(mongoRt);
             } else if (op.equals("delete")) {
@@ -156,7 +156,7 @@ public class LakeSoulRecordConvert implements Serializable {
                 Struct before = convertBSONToStruct(fullDocumentValue);
                 Schema beforSchema = before.schema();
                 RowData delete = convert(before,beforSchema,RowKind.DELETE,sortField);
-                RowType rt = toFlinkRowType(beforSchema, true);
+                RowType rt = toFlinkRowType(beforSchema, primaryKeys, true);
                 builder.setOperation("delete").setBeforeRowData(delete).setBeforeRowType(rt);
                 delete.setRowKind(RowKind.DELETE);
             } else {
@@ -165,13 +165,13 @@ public class LakeSoulRecordConvert implements Serializable {
                 Schema beforeSchema = before.schema();
                 RowData beforeData = convert(before, beforeSchema, RowKind.UPDATE_BEFORE, sortField);
                 beforeData.setRowKind(RowKind.UPDATE_BEFORE);
-                RowType beforeRT = toFlinkRowType(beforeSchema, true);
+                RowType beforeRT = toFlinkRowType(beforeSchema, primaryKeys, true);
                 String fullDocument = value.getString(MongoDBEnvelope.FULL_DOCUMENT_FIELD);
                 Struct after = convertBSONToStruct(fullDocument);
                 Schema afterSchema = after.schema();
                 RowData afterData = convert(after, afterSchema, RowKind.UPDATE_AFTER, sortField);
                 afterData.setRowKind(RowKind.UPDATE_AFTER);
-                RowType afterRT = toFlinkRowType(afterSchema, true);
+                RowType afterRT = toFlinkRowType(afterSchema, primaryKeys, true);
                 if (partitionFieldsChanged(beforeRT, beforeData, afterRT, afterData)) {
                     // partition fields changed. we need to emit both before and after RowData
                     builder.setOperation("update").setBeforeRowData(beforeData).setBeforeRowType(beforeRT)
@@ -190,7 +190,7 @@ public class LakeSoulRecordConvert implements Serializable {
                 Struct after = value.getStruct(Envelope.FieldName.AFTER);
                 RowData insert = convert(after, afterSchema, RowKind.INSERT, sortField);
                 //boolean afterNullable = afterSchema.isOptional();
-                RowType rt = toFlinkRowType(afterSchema,false);
+                RowType rt = toFlinkRowType(afterSchema, primaryKeys,false);
                 insert.setRowKind(RowKind.INSERT);
                 builder.setOperation("insert").setAfterRowData(insert).setAfterType(rt);
             } else if (op == Envelope.Operation.DELETE) {
@@ -198,7 +198,7 @@ public class LakeSoulRecordConvert implements Serializable {
                 Struct before = value.getStruct(Envelope.FieldName.BEFORE);
                 RowData delete = convert(before, beforeSchema, RowKind.DELETE, sortField);
 //                boolean nullable = beforeSchema.isOptional();
-                RowType rt = toFlinkRowType(beforeSchema,false);
+                RowType rt = toFlinkRowType(beforeSchema, primaryKeys,false);
                 delete.setRowKind(RowKind.DELETE);
                 builder.setOperation("delete").setBeforeRowData(delete).setBeforeRowType(rt);
 
@@ -207,13 +207,13 @@ public class LakeSoulRecordConvert implements Serializable {
                 Struct before = value.getStruct(Envelope.FieldName.BEFORE);
                 RowData beforeData = convert(before, beforeSchema, RowKind.UPDATE_BEFORE, sortField);
                 //boolean beforNullable = beforeSchema.isOptional();
-                RowType beforeRT = toFlinkRowType(beforeSchema,false);
+                RowType beforeRT = toFlinkRowType(beforeSchema, primaryKeys,false);
                 beforeData.setRowKind(RowKind.UPDATE_BEFORE);
                 Schema afterSchema = valueSchema.field(Envelope.FieldName.AFTER).schema();
                 Struct after = value.getStruct(Envelope.FieldName.AFTER);
                 RowData afterData = convert(after, afterSchema, RowKind.UPDATE_AFTER, sortField);
                 //boolean afterNullable = afterSchema.isOptional();
-                RowType afterRT = toFlinkRowType(afterSchema,false);
+                RowType afterRT = toFlinkRowType(afterSchema, primaryKeys,false);
                 afterData.setRowKind(RowKind.UPDATE_AFTER);
                 if (partitionFieldsChanged(beforeRT, beforeData, afterRT, afterData)) {
                     // partition fields changed. we need to emit both before and after RowData
@@ -244,7 +244,7 @@ public class LakeSoulRecordConvert implements Serializable {
         return RowType.of(colTypes, colNames);
     }
 
-    public RowType toFlinkRowType(Schema schema, boolean isMongoDDL) {
+    public RowType toFlinkRowType(Schema schema, List<String> primaryKeys, boolean isMongoDDL) {
         int arity = schema.fields().size() + 1;
         if (useCDC) ++arity;
         String[] colNames = new String[arity];
@@ -255,8 +255,8 @@ public class LakeSoulRecordConvert implements Serializable {
             colNames[i] = item.name();
             if (isMongoDDL){
                 colTypes[i] = convertToLogical(item.schema(), !item.name().equals("_id"));
-            }else {
-                colTypes[i] = convertToLogical(item.schema(), item.schema().isOptional());
+            } else {
+                colTypes[i] = convertToLogical(item.schema(), primaryKeys.contains(colNames[i]) ? false : item.schema().isOptional());
             }
         }
 //        colNames[useCDC ? arity - 3 : arity - 2] = BINLOG_FILE_INDEX;

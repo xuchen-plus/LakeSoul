@@ -113,7 +113,7 @@ public class BinarySourceRecord {
                 }
             }
             long sortField = (binlogFileIndex << 32) + binlogPosition;
-            LakeSoulRowDataWrapper data = convert.toLakeSoulDataType(valueSchema, value, tableId, tsMs, sortField);
+            LakeSoulRowDataWrapper data = convert.toLakeSoulDataType(primaryKeys, valueSchema, value, tableId, tsMs, sortField);
             String tablePath;
             if (tableId.schema() == null) {
                 tablePath = new Path(new Path(basePath, tableId.catalog()), tableId.table()).toString();
