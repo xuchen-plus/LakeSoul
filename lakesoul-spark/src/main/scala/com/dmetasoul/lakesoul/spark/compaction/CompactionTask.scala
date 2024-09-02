@@ -91,7 +91,9 @@ object CompactionTask {
 
   class CompactionTableInfo(path: String, partitionDesc: String, setValue: String) extends Thread {
     override def run(): Unit = {
+      val threadName = Thread.currentThread().getName
       try {
+        println("------ " + threadName + " is compressing table path is: " + path + " ------")
         val table = LakeSoulTable.forPath(path)
         if (partitionDesc == "") {
           table.compaction()
@@ -104,10 +106,13 @@ object CompactionTask {
           table.compaction(partitions)
         }
       } catch {
-        case e: Exception => throw e
+        case e: Exception => {
+          println("****** " + threadName + " throw exception, table path is: " + path + " ******")
+          throw e
+        }
       } finally {
         threadMap.put(setValue, 0)
-        println("========== " + dateFormat.format(new Date()) + " processed notification: " + setValue + " ========== ")
+        println("========== " + dateFormat.format(new Date()) + " " + threadName + " processed notification: " + setValue + " ========== ")
       }
     }
   }
