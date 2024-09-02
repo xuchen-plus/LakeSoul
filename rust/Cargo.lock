@@ -1910,6 +1910,7 @@ dependencies = [
  "half",
  "hdfs-sys",
  "hdrs",
+ "hex",
  "lazy_static",
  "log",
  "object_store",
