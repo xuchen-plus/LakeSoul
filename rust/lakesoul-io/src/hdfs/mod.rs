@@ -11,33 +11,18 @@ use bytes::Bytes;
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
 use futures::stream::BoxStream;
-use hdfs_sys::{hdfsGetLastExceptionRootCause, hdfsGetLastExceptionStackTrace};
 use hdrs::{Client, ClientBuilder};
 use object_store::path::Path;
 use object_store::Error::Generic;
 use object_store::{GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore};
 use parquet::data_type::AsBytes;
-use std::ffi::CStr;
 use std::fmt::{Debug, Display, Formatter};
-use std::io;
 use std::io::ErrorKind::NotFound;
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt};
-
-fn refine_io_error(e: io::Error) -> io::Error {
-    unsafe {
-        let errmsg = format!(
-            "HDFS client failed: {:?}\nroot cause: {:?}\nstack trace: {:?}",
-            e,
-            CStr::from_ptr(hdfsGetLastExceptionRootCause()),
-            CStr::from_ptr(hdfsGetLastExceptionStackTrace())
-        );
-        io::Error::new(e.kind(), errmsg)
-    }
-}
 
 pub struct Hdfs {
     client: Arc<Client>,
@@ -54,7 +39,7 @@ impl Hdfs {
         let client = client_builder.connect();
         match client {
             Ok(c) => Ok(Self { client: Arc::new(c) }),
-            Err(e) => Err(DataFusionError::IoError(refine_io_error(e))),
+            Err(e) => Err(DataFusionError::IoError(e)),
         }
     }
 
@@ -70,7 +55,7 @@ impl Hdfs {
                     } else {
                         Err(Generic {
                             store: "hdfs",
-                            source: Box::new(refine_io_error(e)),
+                            source: Box::new(e),
                         })
                     }
                 }
@@ -107,20 +92,20 @@ impl ObjectStore for Hdfs {
             .await
             .map_err(|e| Generic {
                 store: "hdfs",
-                source: Box::new(refine_io_error(e)),
+                source: Box::new(e),
             })?
             .compat();
         async_write.write_all(bytes.as_bytes()).await.map_err(|e| Generic {
             store: "hdfs",
-            source: Box::new(refine_io_error(e)),
+            source: Box::new(e),
         })?;
         async_write.flush().await.map_err(|e| Generic {
             store: "hdfs",
-            source: Box::new(refine_io_error(e)),
+            source: Box::new(e),
         })?;
         async_write.shutdown().await.map_err(|e| Generic {
             store: "hdfs",
-            source: Box::new(refine_io_error(e)),
+            source: Box::new(e),
         })
     }
 
@@ -141,7 +126,7 @@ impl ObjectStore for Hdfs {
             .await
             .map_err(|e| Generic {
                 store: "hdfs",
-                source: Box::new(refine_io_error(e)),
+                source: Box::new(e),
             })?;
         Ok((location.to_string(), Box::new(async_write.compat_write())))
     }
@@ -191,7 +176,7 @@ impl ObjectStore for Hdfs {
                 .open(location.as_ref())
                 .map_err(|e| Generic {
                     store: "hdfs",
-                    source: Box::new(refine_io_error(e)),
+                    source: Box::new(e),
                 })?;
             file.seek(SeekFrom::Start(range.start as u64)).map_err(|e| Generic {
                 store: "hdfs",
@@ -201,7 +186,7 @@ impl ObjectStore for Hdfs {
             let mut buf = vec![0; to_read];
             file.read_exact(buf.as_mut_slice()).map_err(|e| Generic {
                 store: "hdfs",
-                source: Box::new(refine_io_error(e)),
+                source: Box::new(e),
             })?;
             Ok(buf.into())
         })
@@ -224,7 +209,7 @@ impl ObjectStore for Hdfs {
         maybe_spawn_blocking(move || {
             let meta = client.metadata(path.as_str()).map_err(|e| Generic {
                 store: "hdfs",
-                source: Box::new(refine_io_error(e)),
+                source: Box::new(e),
             })?;
             Ok(ObjectMeta {
                 location: Path::parse(meta.path()).map_err(|e| Generic {
@@ -246,11 +231,11 @@ impl ObjectStore for Hdfs {
         maybe_spawn_blocking(move || match location.filename() {
             None => client.remove_dir(t.as_str()).map_err(|e| Generic {
                 store: "hdfs",
-                source: Box::new(refine_io_error(e)),
+                source: Box::new(e),
             }),
             Some(_) => client.remove_file(t.as_str()).map_err(|e| Generic {
                 store: "hdfs",
-                source: Box::new(refine_io_error(e)),
+                source: Box::new(e),
             }),
         })
         .await
@@ -278,7 +263,7 @@ impl ObjectStore for Hdfs {
             .await
             .map_err(|e| Generic {
                 store: "hdfs",
-                source: Box::new(refine_io_error(e)),
+                source: Box::new(e),
             })?
             .compat();
         let mut async_write = self
@@ -289,18 +274,18 @@ impl ObjectStore for Hdfs {
             .await
             .map_err(|e| Generic {
                 store: "hdfs",
-                source: Box::new(refine_io_error(e)),
+                source: Box::new(e),
             })?
             .compat_write();
         tokio::io::copy(&mut async_read, &mut async_write)
             .await
             .map_err(|e| Generic {
                 store: "hdfs",
-                source: Box::new(refine_io_error(e)),
+                source: Box::new(e),
             })?;
         async_write.shutdown().await.map_err(|e| Generic {
             store: "hdfs",
-            source: Box::new(refine_io_error(e)),
+            source: Box::new(e),
         })
     }
 
@@ -311,7 +296,7 @@ impl ObjectStore for Hdfs {
         maybe_spawn_blocking(move || {
             client.rename_file(from.as_str(), to.as_str()).map_err(|e| Generic {
                 store: "hdfs",
-                source: Box::new(refine_io_error(e)),
+                source: Box::new(e),
             })
         })
         .await
