@@ -11,7 +11,7 @@ use bytes::Bytes;
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
 use futures::stream::BoxStream;
-use hdrs::{Client, ClientBuilder};
+use hdrs::{Client, ClientBuilder, File};
 use object_store::path::Path;
 use object_store::Error::Generic;
 use object_store::{GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore};
