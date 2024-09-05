@@ -10,12 +10,9 @@ import com.ververica.cdc.connectors.base.source.jdbc.JdbcIncrementalSource;
 import com.ververica.cdc.connectors.mysql.source.MySqlSource;
 import com.ververica.cdc.connectors.mysql.source.MySqlSourceBuilder;
 import com.ververica.cdc.connectors.oracle.source.OracleSourceBuilder;
-import com.ververica.cdc.connectors.postgres.source.PostgresSourceBuilder;
-import com.ververica.cdc.connectors.mongodb.source.MongoDBSource;
 
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.time.Time;
-import com.ververica.cdc.connectors.sqlserver.source.SqlServerSourceBuilder;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.lakesoul.sink.LakeSoulMultiTableSinkStreamBuilder;
@@ -138,20 +135,9 @@ public class JdbcCDC {
         if (dbType.equalsIgnoreCase("mysql")) {
             mysqlCdc(lakeSoulRecordConvert, conf, env, sinkDBName);
         }
-        if (dbType.equalsIgnoreCase("postgres")) {
-            slotName = parameter.get(SOURCE_DB_SLOT_NAME.key(), SOURCE_DB_SLOT_NAME.defaultValue());
-            postgresCdc(lakeSoulRecordConvert, conf, env, sinkDBName);
-        }
         if (dbType.equalsIgnoreCase("oracle")) {
             oracleCdc(lakeSoulRecordConvert, conf, env, sinkDBName);
         }
-        if (dbType.equalsIgnoreCase("sqlserver")) {
-            sqlserverCdc(lakeSoulRecordConvert, conf, env, sinkDBName);
-        }
-        if (dbType.equalsIgnoreCase("mongodb")) {
-            mongoCdc(lakeSoulRecordConvert, conf, env, sinkDBName);
-        }
-
     }
 
     private static void mysqlCdc(LakeSoulRecordConvert lakeSoulRecordConvert, Configuration conf,
@@ -188,39 +174,6 @@ public class JdbcCDC {
         DataStreamSink<BinarySourceRecord> dmlSink = builder.buildLakeSoulDMLSink(stream);
         env.execute("LakeSoul CDC Sink From MySQL Database " + dbName);
 
-    }
-
-    private static void postgresCdc(LakeSoulRecordConvert lakeSoulRecordConvert, Configuration conf,
-                                    StreamExecutionEnvironment env, String sinkDBName) throws Exception {
-        JdbcIncrementalSource<BinarySourceRecord> pgSource = PostgresSourceBuilder.PostgresIncrementalSource.<BinarySourceRecord>builder()
-                .hostname(host)
-                .schemaList(schemaList)
-                .tableList(tableList)
-                .database(dbName)
-                .port(port)
-                .username(userName)
-                .password(passWord)
-                .decodingPluginName(pluginName)
-                .splitSize(splitSize)
-                .slotName(slotName)
-                .deserializer(new BinaryDebeziumDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH), sinkDBName))
-                .build();
-
-        NameSpaceManager manager = new NameSpaceManager();
-        for (String schema : schemaList) {
-            manager.importOrSyncLakeSoulNamespace(schema);
-        }
-        LakeSoulMultiTableSinkStreamBuilder.Context context = new LakeSoulMultiTableSinkStreamBuilder.Context();
-        context.env = env;
-        context.conf = (Configuration) env.getConfiguration();
-        LakeSoulMultiTableSinkStreamBuilder
-                builder =
-                new LakeSoulMultiTableSinkStreamBuilder(pgSource, context, lakeSoulRecordConvert);
-        DataStreamSource<BinarySourceRecord> source = builder.buildMultiTableSource("Postgres Source");
-
-        DataStream<BinarySourceRecord> stream = builder.buildHashPartitionedCDCStream(source);
-        DataStreamSink<BinarySourceRecord> dmlSink = builder.buildLakeSoulDMLSink(stream);
-        env.execute("LakeSoul CDC Sink From Postgres Database " + dbName);
     }
 
     private static void oracleCdc(LakeSoulRecordConvert lakeSoulRecordConvert, Configuration conf,
@@ -262,63 +215,5 @@ public class JdbcCDC {
         DataStream<BinarySourceRecord> stream = builder.buildHashPartitionedCDCStream(source);
         DataStreamSink<BinarySourceRecord> dmlSink = builder.buildLakeSoulDMLSink(stream);
         env.execute("LakeSoul CDC Sink From Oracle Database " + dbName);
-    }
-
-    public static void sqlserverCdc(LakeSoulRecordConvert lakeSoulRecordConvert, Configuration conf,
-                                    StreamExecutionEnvironment env, String sinkDBName) throws Exception {
-        SqlServerSourceBuilder.SqlServerIncrementalSource<String> sqlServerSource =
-                new SqlServerSourceBuilder()
-                        .hostname(host)
-                        .port(port)
-                        .databaseList(dbName)
-                        .tableList(tableList)
-                        .username(userName)
-                        .password(passWord)
-                        .deserializer(new BinaryDebeziumDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH), sinkDBName))
-                        .startupOptions(StartupOptions.initial())
-                        .build();
-        NameSpaceManager manager = new NameSpaceManager();
-        manager.importOrSyncLakeSoulNamespace(dbName);
-        LakeSoulMultiTableSinkStreamBuilder.Context context = new LakeSoulMultiTableSinkStreamBuilder.Context();
-        context.env = env;
-        context.conf = (Configuration) env.getConfiguration();
-        LakeSoulMultiTableSinkStreamBuilder
-                builder =
-                new LakeSoulMultiTableSinkStreamBuilder(sqlServerSource, context, lakeSoulRecordConvert);
-        DataStreamSource<BinarySourceRecord> source = builder.buildMultiTableSource("Sqlserver Source");
-
-        DataStream<BinarySourceRecord> stream = builder.buildHashPartitionedCDCStream(source);
-        DataStreamSink<BinarySourceRecord> dmlSink = builder.buildLakeSoulDMLSink(stream);
-        env.execute("LakeSoul CDC Sink From sqlserver Database " + dbName);
-    }
-
-    private static void mongoCdc(LakeSoulRecordConvert lakeSoulRecordConvert, Configuration conf,
-                                 StreamExecutionEnvironment env, String sinkDBName) throws Exception {
-        MongoDBSource<BinarySourceRecord> mongoSource =
-                MongoDBSource.<BinarySourceRecord>builder()
-                        .hosts(host)
-                        .databaseList(dbName)
-                        .collectionList(tableList)
-                        .startupOptions(StartupOptions.initial())
-                        .scanFullChangelog(true)
-                        .batchSize(batchSize)
-                        .username(userName)
-                        .password(passWord)
-                        .deserializer(new BinaryDebeziumDeserializationSchema(lakeSoulRecordConvert, conf.getString(WAREHOUSE_PATH), sinkDBName))
-                        .build();
-        NameSpaceManager manager = new NameSpaceManager();
-        manager.importOrSyncLakeSoulNamespace(dbName);
-        LakeSoulMultiTableSinkStreamBuilder.Context context = new LakeSoulMultiTableSinkStreamBuilder.Context();
-        context.env = env;
-        context.conf = (Configuration) env.getConfiguration();
-        LakeSoulMultiTableSinkStreamBuilder
-                builder =
-                new LakeSoulMultiTableSinkStreamBuilder(mongoSource, context, lakeSoulRecordConvert);
-        DataStreamSource<BinarySourceRecord> source = builder.buildMultiTableSource("mongodb Source");
-
-        DataStream<BinarySourceRecord> stream = builder.buildHashPartitionedCDCStream(source);
-        DataStreamSink<BinarySourceRecord> dmlSink = builder.buildLakeSoulDMLSink(stream);
-        env.execute("LakeSoul CDC Sink From mongo Database " + dbName);
-
     }
 }
