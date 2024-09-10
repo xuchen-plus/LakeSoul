@@ -78,7 +78,7 @@ public class LakeSoulSinkOptions {
     public static final ConfigOption<Integer> BUCKET_PARALLELISM = ConfigOptions
             .key("sink.parallelism")
             .intType()
-            .defaultValue(4)
+            .defaultValue(16)
             .withDescription("parallelism of sink");
 
     public static final ConfigOption<Integer> HASH_BUCKET_NUM = ConfigOptions
