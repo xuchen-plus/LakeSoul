@@ -103,7 +103,7 @@ object CompactionTask {
               partition.replace("=", "='") + "'"
             }
           ).mkString(" and ")
-          table.compaction(partitions)
+          table.compaction(partitions, true)
         }
       } catch {
         case e: Exception => {
