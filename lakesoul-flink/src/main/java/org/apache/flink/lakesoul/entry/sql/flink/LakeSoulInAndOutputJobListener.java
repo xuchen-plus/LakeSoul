@@ -30,6 +30,11 @@ public class LakeSoulInAndOutputJobListener implements JobListener {
     private List<OpenLineage.InputDataset> inputDatasets;
     private List<OpenLineage.OutputDataset> outputDatasets;
     private String executeMode = "STREAM";
+
+    public String getRunId() {
+        return runId.toString();
+    }
+
     private UUID runId;
     OpenLineage.Run run;
     private OpenLineage.Job job;
@@ -45,6 +50,14 @@ public class LakeSoulInAndOutputJobListener implements JobListener {
     public LakeSoulInAndOutputJobListener(String url, String executeMode) {
         this(url);
         this.executeMode = executeMode;
+    }
+
+    public LakeSoulInAndOutputJobListener jobName(String name, String namespace,String uuid) {
+        this.runId = UUID.fromString(uuid);
+        this.run = openLineage.newRunBuilder().runId(this.runId).build();
+        OpenLineage.JobFacets jobFacets = openLineage.newJobFacetsBuilder().jobType(openLineage.newJobTypeJobFacetBuilder().jobType("Flink Job").integration("Flink").processingType(this.executeMode).build()).build();
+        this.job = openLineage.newJobBuilder().name(name).namespace(namespace).facets(jobFacets).build();
+        return this;
     }
 
     public LakeSoulInAndOutputJobListener jobName(String name, String namespace) {
@@ -76,6 +89,20 @@ public class LakeSoulInAndOutputJobListener implements JobListener {
                         ).build()
         );
         return this;
+    }
+    public void emit(){
+        OpenLineage.RunEvent runStateUpdate =
+                openLineage.newRunEventBuilder()
+                        .eventType(OpenLineage.RunEvent.EventType.COMPLETE)
+                        .eventTime(ZonedDateTime.now())
+                        .run(this.run)
+                        .job(this.job)
+                        .inputs(this.inputDatasets)
+                        .outputs(this.outputDatasets)
+                        .build();
+        if(this.inputDatasets != null || this.outputDatasets != null){
+            this.client.emit(runStateUpdate);
+        }
     }
 
     public LakeSoulInAndOutputJobListener outputFacets(String outputName, String outputNamespace, String[] outputSchemaNames, String[] outputSchemaTypes) {

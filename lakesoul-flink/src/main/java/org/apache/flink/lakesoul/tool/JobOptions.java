@@ -129,6 +129,12 @@ public class JobOptions {
             ConfigOptions.key("execution.attached").booleanType().defaultValue(false);
     public static final ConfigOption lineageOption =
             ConfigOptions.key("openlineage.executed").booleanType().defaultValue(false);
+    public static final ConfigOption lineageJobUUID =
+            ConfigOptions.key("openlineage.uuid").stringType().noDefaultValue();
+    public static final ConfigOption linageJobName =
+            ConfigOptions.key("openlineage.jobname").stringType().noDefaultValue();
+    public static final ConfigOption linageJobNamespace =
+            ConfigOptions.key("openlineage.jobnamespace").stringType().noDefaultValue();
 
     public static final ConfigOption<String> KUBE_CLUSTER_ID =
             key("kubernetes.cluster-id")

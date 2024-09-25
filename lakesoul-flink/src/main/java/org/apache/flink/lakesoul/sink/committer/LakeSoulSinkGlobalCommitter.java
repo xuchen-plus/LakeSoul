@@ -11,17 +11,20 @@ import com.dmetasoul.lakesoul.meta.DBManager;
 import com.dmetasoul.lakesoul.meta.DBUtil;
 import com.dmetasoul.lakesoul.meta.dao.TableInfoDao;
 import com.dmetasoul.lakesoul.meta.entity.TableInfo;
+import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.flink.api.connector.sink.GlobalCommitter;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
+import org.apache.flink.lakesoul.entry.sql.flink.LakeSoulInAndOutputJobListener;
 import org.apache.flink.lakesoul.sink.LakeSoulMultiTablesSink;
 import org.apache.flink.lakesoul.sink.state.LakeSoulMultiTableSinkCommittable;
 import org.apache.flink.lakesoul.sink.state.LakeSoulMultiTableSinkGlobalCommittable;
 import org.apache.flink.lakesoul.sink.writer.AbstractLakeSoulMultiTableSinkWriter;
 import org.apache.flink.lakesoul.tool.FlinkUtil;
+import org.apache.flink.lakesoul.tool.JobOptions;
 import org.apache.flink.lakesoul.types.TableSchemaIdentity;
 import org.apache.flink.runtime.execution.SuppressRestartsException;
 import org.apache.flink.table.catalog.ObjectPath;
@@ -141,6 +144,14 @@ public class LakeSoulSinkGlobalCommitter
             StructType sparkSchema = ArrowUtils.fromArrowSchema(msgSchema);
 
             TableInfo tableInfo = dbManager.getTableInfoByNameAndNamespace(tableName, tableNamespace);
+            LakeSoulInAndOutputJobListener listener = null;
+            if (this.conf.getBoolean(JobOptions.lineageOption)) {
+                listener = new LakeSoulInAndOutputJobListener(this.conf.getString(JobOptions.urlOption));
+                String uuid = this.conf.getString(JobOptions.lineageJobUUID);
+                String jobName = this.conf.getString(JobOptions.linageJobName);
+                String namespace = this.conf.getString(JobOptions.linageJobNamespace);
+                listener.jobName(jobName, namespace, uuid);
+            }
             if (tableInfo == null) {
                 if (!conf.getBoolean(AUTO_SCHEMA_CHANGE)) {
                     throw new SuppressRestartsException(
@@ -171,6 +182,20 @@ public class LakeSoulSinkGlobalCommitter
                 dbManager.createNewTable(tableId, tableNamespace, tableName, identity.tableLocation,
                         msgSchema.toJson(),
                         properties, partition);
+                if (this.conf.getBoolean(JobOptions.lineageOption)) {
+                    String domain = dbManager.getNamespaceByNamespace(tableNamespace).getDomain();
+                    int size = msgSchema.getFields().size();
+                    String[] colNames = new String[size];
+                    String[] colTypes = new String[size];
+                    for (int i = 0; i < size; i++) {
+                        Field field = msgSchema.getFields().get(i);
+                        colNames[i] = field.getName();
+                        colTypes[i] = field.getType().toString();
+                    }
+                    listener.outputFacets("lakesoul." + tableNamespace + "." + tableName, domain, colNames,colTypes);
+                    listener.emit();
+                }
+
             } else {
                 if (conf.getBoolean(AUTO_SCHEMA_CHANGE)) {
                     DBUtil.TablePartitionKeys
