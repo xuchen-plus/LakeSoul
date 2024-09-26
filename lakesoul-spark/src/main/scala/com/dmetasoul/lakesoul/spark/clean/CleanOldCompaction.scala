@@ -81,10 +81,12 @@ object CleanOldCompaction {
 
     })
     pathSet.foreach(p => {
-      val path = new Path(p)
-      val sessionHadoopConf = spark.sessionState.newHadoopConf()
-      val fs = path.getFileSystem(sessionHadoopConf)
-      fs.delete(path, true)
+      if (p != null && p != "") {
+        val path = new Path(p)
+        val sessionHadoopConf = spark.sessionState.newHadoopConf()
+        val fs = path.getFileSystem(sessionHadoopConf)
+        fs.delete(path, true)
+      }
     })
   }
 
