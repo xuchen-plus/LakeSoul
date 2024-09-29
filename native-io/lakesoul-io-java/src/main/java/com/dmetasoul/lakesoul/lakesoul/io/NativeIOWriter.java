@@ -4,25 +4,27 @@
 
 package com.dmetasoul.lakesoul.lakesoul.io;
 
-import jnr.ffi.Memory;
+import com.dmetasoul.lakesoul.meta.DBUtil;
+import com.dmetasoul.lakesoul.meta.entity.TableInfo;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jnr.ffi.Pointer;
 import jnr.ffi.Runtime;
 import org.apache.arrow.c.ArrowArray;
 import org.apache.arrow.c.ArrowSchema;
 import org.apache.arrow.c.Data;
-import com.dmetasoul.lakesoul.lakesoul.io.jnr.LibLakeSoulIO;
+import org.apache.arrow.util.Preconditions;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.types.pojo.Schema;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
+
+import static com.dmetasoul.lakesoul.meta.DBConfig.TableInfoProperty.HASH_BUCKET_NUM;
 
 public class NativeIOWriter extends NativeIOBase implements AutoCloseable {
 
@@ -31,6 +33,31 @@ public class NativeIOWriter extends NativeIOBase implements AutoCloseable {
     public NativeIOWriter(Schema schema) {
         super("NativeWriter");
         setSchema(schema);
+    }
+
+    public NativeIOWriter(TableInfo tableInfo) {
+        super("NativeWriter");
+        try {
+            setSchema(Schema.fromJSON(tableInfo.getTableSchema()));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        DBUtil.TablePartitionKeys partitionKeys = DBUtil.parseTableInfoPartitions(tableInfo.getPartitions());
+        setPrimaryKeys(partitionKeys.primaryKeys);
+        setRangePartitions(partitionKeys.rangeKeys);
+        useDynamicPartition(true);
+
+        ObjectMapper mapper = new ObjectMapper();
+
+        try {
+            Map<String, Object> properties = mapper.readValue(tableInfo.getProperties(), Map.class);
+            setHashBucketNum(Integer.parseInt(properties.get(HASH_BUCKET_NUM).toString()));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
+
+        withPrefix(tableInfo.getTablePath());
+
     }
 
 
@@ -112,7 +139,39 @@ public class NativeIOWriter extends NativeIOBase implements AutoCloseable {
         }
     }
 
-    public HashMap<String, List<String>> flush() throws IOException {
+    public static class FlushResult {
+        final String filePath;
+        final Long fileSize;
+
+        final String fileExistCols;
+
+        FlushResult(String filePath, Long fileSize, String fileExistCols) {
+            this.filePath = filePath;
+            this.fileSize = fileSize;
+            this.fileExistCols = fileExistCols;
+        }
+
+        public Long getFileSize() {
+            return fileSize;
+        }
+
+        public String getFilePath() {
+            return filePath;
+        }
+
+        public String getFileExistCols() {
+            return fileExistCols;
+        }
+    }
+
+    public static FlushResult decodeFlushResult(String encoded) {
+        String[] fields = encoded.split("\u0003");
+        
+        Preconditions.checkArgument(fields.length == 3);
+        return new FlushResult(fields[0], Long.parseLong(fields[1]), fields[2]);
+    }
+
+    public HashMap<String, List<FlushResult>> flush() throws IOException {
         AtomicReference<String> errMsg = new AtomicReference<>();
         AtomicReference<Integer> lenResult = new AtomicReference<>();
         IntegerCallback nativeIntegerCallback = new IntegerCallback((len, err) -> {
@@ -158,11 +217,12 @@ public class NativeIOWriter extends NativeIOBase implements AutoCloseable {
                 if (partitionNum != splits.length - 1) {
                     throw new IOException("Dynamic Partitions Result [" + decodedResult + "] encode error: partition number mismatch " + partitionNum + "!=" + (splits.length - 1));
                 }
-                HashMap<String, List<String>> partitionDescAndFilesMap = new HashMap<>();
+                HashMap<String, List<FlushResult>> partitionDescAndFilesMap = new HashMap<>();
                 for (int i = 1; i < splits.length; i++) {
                     String[] partitionDescAndFiles = splits[i].split("\u0002");
                     List<String> list = new ArrayList<>(Arrays.asList(partitionDescAndFiles).subList(1, partitionDescAndFiles.length));
-                    partitionDescAndFilesMap.put(partitionDescAndFiles[0], list);
+                    List<FlushResult> result = list.stream().map(NativeIOWriter::decodeFlushResult).collect(Collectors.toList());
+                    partitionDescAndFilesMap.put(partitionDescAndFiles[0], result);
 
                 }
                 return partitionDescAndFilesMap;
