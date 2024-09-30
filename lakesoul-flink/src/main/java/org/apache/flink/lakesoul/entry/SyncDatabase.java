@@ -15,6 +15,7 @@ import org.apache.flink.connector.mongodb.sink.MongoSink;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.RestOptions;
 import org.apache.flink.lakesoul.entry.sql.flink.LakeSoulInAndOutputJobListener;
+import org.apache.flink.lakesoul.entry.sql.utils.FileUtil;
 import org.apache.flink.lakesoul.metadata.LakeSoulCatalog;
 import org.apache.flink.lakesoul.tool.JobOptions;
 import org.apache.flink.streaming.api.CheckpointingMode;
@@ -69,20 +70,20 @@ public class SyncDatabase {
         targetTableName = parameter.get(TARGET_DB_TABLE_NAME.key()).toLowerCase();
         url = parameter.get(TARGET_DB_URL.key());
         checkpointInterval = parameter.getInt(JOB_CHECKPOINT_INTERVAL.key(), JOB_CHECKPOINT_INTERVAL.defaultValue());
-        if (dbType.equals("mysql") || dbType.equals("postgresql") || dbType.equals("doris")){
+        if (dbType.equals("mysql") || dbType.equals("postgresql") || dbType.equals("doris")) {
             for (int i = 0; i < args.length; i++) {
-                if ( args[i].startsWith("--D")){
+                if (args[i].startsWith("--D")) {
                     connectorOptions.append("'")
                             .append(args[i].substring(3))
                             .append("'")
                             .append("=")
                             .append("'")
-                            .append(args[i+1])
+                            .append(args[i + 1])
                             .append("'")
                             .append(",");
                 }
             }
-            if (connectorOptions.length()>0){
+            if (connectorOptions.length() > 0) {
                 jdbcOrDorisOptions = connectorOptions.substring(0, connectorOptions.length() - 1);
             }
         }
@@ -100,9 +101,9 @@ public class SyncDatabase {
             conf.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
             conf.set(JobOptions.transportTypeOption, "http");
             conf.set(JobOptions.urlOption, lineageUrl);
-            conf.set(JobOptions.execAttach, true);
+            conf.set(JobOptions.execAttach, false);
             env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
-            String appName = env.getConfiguration().get(JobOptions.KUBE_CLUSTER_ID);
+            String appName = FileUtil.getSubNameFromBatch(env.getConfiguration().get(JobOptions.KUBE_CLUSTER_ID));
             String namespace = System.getenv("LAKESOUL_CURRENT_DOMAIN");
             if (namespace == null) {
                 namespace = "public";
@@ -224,7 +225,7 @@ public class SyncDatabase {
                 stringFieldTypes[i] = "TIMESTAMP";
             } else if (fieldTypes[i].getLogicalType() instanceof VarCharType) {
                 stringFieldTypes[i] = "VARCHAR";
-            } else if (fieldTypes[i].getLogicalType() instanceof LocalZonedTimestampType ) {
+            } else if (fieldTypes[i].getLogicalType() instanceof LocalZonedTimestampType) {
                 stringFieldTypes[i] = "TIMESTAMP";
             } else {
                 stringFieldTypes[i] = fieldTypes[i].toString();
@@ -300,7 +301,7 @@ public class SyncDatabase {
             }
         }
         String sql;
-        if (jdbcOrDorisOptions==null){
+        if (jdbcOrDorisOptions == null) {
             if (tablePk != null) {
                 sql = String.format(
                         "create table %s(%s ,PRIMARY KEY (%s) NOT ENFORCED) with ('connector' = '%s', 'url' = '%s', 'table-name' = '%s', 'username' = '%s', 'password' = '%s', 'sink.parallelism' = '%s')",
@@ -309,7 +310,7 @@ public class SyncDatabase {
                 sql = String.format("create table %s(%s) with ('connector' = '%s', 'url' = '%s', 'table-name' = '%s', 'username' = '%s', 'password' = '%s', 'sink.parallelism' = '%s')",
                         targetTableName, coulmns, "jdbc", jdbcUrl, targetTableName, username, password, sinkParallelism);
             }
-        }else {
+        } else {
             if (tablePk != null) {
                 sql = String.format(
                         "create table %s(%s ,PRIMARY KEY (%s) NOT ENFORCED) with ('connector' = '%s', 'url' = '%s', 'table-name' = '%s', 'username' = '%s', 'password' = '%s', 'sink.parallelism' = '%s', %s)",
@@ -364,7 +365,7 @@ public class SyncDatabase {
             }
         }
         String sql;
-        if (jdbcOrDorisOptions==null){
+        if (jdbcOrDorisOptions == null) {
             if (tablePk != null) {
                 sql = String.format(
                         "create table %s(%s ,PRIMARY KEY (%s) NOT ENFORCED) with ('connector' = '%s', 'url' = '%s', 'table-name' = '%s', 'username' = '%s', 'password' = '%s', 'sink.parallelism' = '%s')",
@@ -373,7 +374,7 @@ public class SyncDatabase {
                 sql = String.format("create table %s(%s) with ('connector' = '%s', 'url' = '%s', 'table-name' = '%s', 'username' = '%s', 'password' = '%s', 'sink.parallelism' = '%s')",
                         targetTableName, coulmns, "jdbc", jdbcUrl, targetTableName, username, password, sinkParallelism);
             }
-        }else {
+        } else {
             if (tablePk != null) {
                 sql = String.format(
                         "create table %s(%s ,PRIMARY KEY (%s) NOT ENFORCED) with ('connector' = '%s', 'url' = '%s', 'table-name' = '%s', 'username' = '%s', 'password' = '%s', 'sink.parallelism' = '%s', %s)",
@@ -409,11 +410,11 @@ public class SyncDatabase {
         String[] dorisFieldTypes = getDorisFieldTypes(fieldDataTypes);
         if (lineageUrl != null) {
             String inputName = "lakeSoul." + sourceDatabase + "." + sourceTableName;
-            String inputnNamespace = getTableDomain(sourceDatabase,sourceTableName);
+            String inputnNamespace = getTableDomain(sourceDatabase, sourceTableName);
             String[] inputTypes = Arrays.stream(fieldDataTypes).map(type -> type.toString()).collect(Collectors.toList()).toArray(new String[0]);
-            listener.inputFacets(inputName,inputnNamespace,fieldNames,inputTypes);
+            listener.inputFacets(inputName, inputnNamespace, fieldNames, inputTypes);
             String targetName = "doris." + targetDatabase + "." + targetTableName;
-            listener.outputFacets(targetName,"lake-public",fieldNames,dorisFieldTypes);
+            listener.outputFacets(targetName, "lake-public", fieldNames, dorisFieldTypes);
         }
         StringBuilder coulmns = new StringBuilder();
         for (int i = 0; i < fieldDataTypes.length; i++) {
@@ -423,7 +424,7 @@ public class SyncDatabase {
             }
         }
         String sql;
-        if (jdbcOrDorisOptions == null){
+        if (jdbcOrDorisOptions == null) {
             sql = String.format(
                     "create table %s(%s) with ('connector' = '%s'," +
                             " 'jdbc-url' = '%s'," +
@@ -434,7 +435,7 @@ public class SyncDatabase {
                             " 'sink.properties.format' = 'json'," +
                             " 'sink.properties.read_json_by_line' = 'true')",
                     targetTableName, coulmns, "doris", jdbcUrl, fenodes, targetDatabase + "." + targetTableName, username, password);
-        }else {
+        } else {
             sql = String.format(
                     "create table %s(%s) with ('connector' = '%s'," +
                             " 'jdbc-url' = '%s'," +
@@ -449,13 +450,13 @@ public class SyncDatabase {
         }
 
         tEnvs.executeSql(sql);
-        if (lineageUrl != null){
+        if (lineageUrl != null) {
             String insertsql = "insert into " + targetTableName + " select * from lakeSoul.`" + sourceDatabase + "`." + sourceTableName;
-            StreamStatementSet statements =  tEnvs.createStatementSet();
+            StreamStatementSet statements = tEnvs.createStatementSet();
             statements.addInsertSql(insertsql);
             statements.attachAsDataStream();
             env.execute();
-        }else{
+        } else {
             tEnvs.executeSql("insert into " + targetTableName + " select * from lakeSoul.`" + sourceDatabase + "`." + sourceTableName);
 
         }

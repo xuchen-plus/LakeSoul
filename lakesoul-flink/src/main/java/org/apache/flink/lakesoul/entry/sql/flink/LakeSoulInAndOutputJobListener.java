@@ -136,7 +136,7 @@ public class LakeSoulInAndOutputJobListener implements JobListener {
 
         OpenLineage.RunEvent runStateUpdate =
                 openLineage.newRunEventBuilder()
-                        .eventType(OpenLineage.RunEvent.EventType.RUNNING)
+                        .eventType(OpenLineage.RunEvent.EventType.COMPLETE)
                         .eventTime(ZonedDateTime.now())
                         .run(this.run)
                         .job(this.job)

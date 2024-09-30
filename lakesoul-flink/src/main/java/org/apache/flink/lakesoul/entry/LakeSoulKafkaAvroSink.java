@@ -25,6 +25,7 @@ import org.apache.flink.formats.avro.RowDataToAvroConverters.RowDataToAvroConver
 import org.apache.flink.formats.avro.registry.confluent.ConfluentRegistryAvroSerializationSchema;
 import org.apache.flink.formats.avro.typeutils.AvroSchemaConverter;
 import org.apache.flink.lakesoul.entry.sql.flink.LakeSoulInAndOutputJobListener;
+import org.apache.flink.lakesoul.entry.sql.utils.FileUtil;
 import org.apache.flink.lakesoul.source.arrow.LakeSoulArrowSource;
 import org.apache.flink.lakesoul.tool.JobOptions;
 import org.apache.flink.lakesoul.tool.LakeSoulKeyGen;
@@ -147,17 +148,17 @@ public class LakeSoulKafkaAvroSink {
             conf.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
             conf.set(JobOptions.transportTypeOption, "http");
             conf.set(JobOptions.urlOption, lineageUrl);
-            conf.set(JobOptions.execAttach, true);
-            conf.set(lineageOption,true);
+            conf.set(JobOptions.execAttach, false);
+            conf.set(lineageOption, true);
             env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
-            String appName = env.getConfiguration().get(JobOptions.KUBE_CLUSTER_ID);
+            String appName = FileUtil.getSubNameFromBatch(env.getConfiguration().get(JobOptions.KUBE_CLUSTER_ID));
             String namespace = System.getenv("LAKESOUL_CURRENT_DOMAIN");
             if (namespace == null) {
                 namespace = "public";
             }
             listener = new LakeSoulInAndOutputJobListener(lineageUrl);
             listener.jobName(appName, namespace);
-            listener.outputFacets("Kafka."+kafkaTopic,"kafka-public",null,null);
+            listener.outputFacets("Kafka." + kafkaTopic, "kafka-public", null, null);
             DBManager lakesoulDBManager = new DBManager();
             TableInfo tableInfo = lakesoulDBManager.getTableInfoByNameAndNamespace(lakeSoulTableName, lakeSoulDBName);
             String tableSchema = tableInfo.getTableSchema();
@@ -170,7 +171,7 @@ public class LakeSoulKafkaAvroSink {
                 colNames[i] = field.getName();
                 colTypes[i] = field.getType().toString();
             }
-            listener.inputFacets("lakesoul." + lakeSoulDBName + "." + lakeSoulTableName, tableInfo.getDomain(), colNames,colTypes);
+            listener.inputFacets("lakesoul." + lakeSoulDBName + "." + lakeSoulTableName, tableInfo.getDomain(), colNames, colTypes);
             env.registerJobListener(listener);
         } else {
             env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
@@ -221,7 +222,7 @@ public class LakeSoulKafkaAvroSink {
                 .build();
 
 
-        Tuple4<ConfluentRegistryAvroSerializationSchema, RowDataToAvroConverter, RowType, RowData.FieldGetter[]>  keyInfo = getKeyInfo(lakeSoulDBName,
+        Tuple4<ConfluentRegistryAvroSerializationSchema, RowDataToAvroConverter, RowType, RowData.FieldGetter[]> keyInfo = getKeyInfo(lakeSoulDBName,
                 lakeSoulTableName, kafkaTopic, schemaRegistryUrl, props);
         ConfluentRegistryAvroSerializationSchema keySerialization;
         RowDataToAvroConverter keyRowDataToAvroConverter;
@@ -229,7 +230,7 @@ public class LakeSoulKafkaAvroSink {
         FieldGetter[] keyFieldGetters;
         if (keyInfo != null) {
             keySerialization = keyInfo.f0;
-            keyRowDataToAvroConverter = keyInfo.f1 ;
+            keyRowDataToAvroConverter = keyInfo.f1;
             keyRowType = keyInfo.f2;
             keyFieldGetters = keyInfo.f3;
         } else {
@@ -259,7 +260,7 @@ public class LakeSoulKafkaAvroSink {
                                 RowData kafkaRowData = toKafkaAvroRawData(rowData, rowType, String.format("%s.%s", lakeSoulDBName, lakeSoulTableName));
 
                                 byte[] keyBytes = null;
-                                if (keySerialization != null ) {
+                                if (keySerialization != null) {
                                     GenericRecord keyGenericRecord = (GenericRecord) keyRowDataToAvroConverter.convert(
                                             AvroSchemaConverter.convertToSchema(keyRowType, false),
                                             createProjectedRow(rowData, RowKind.INSERT, keyFieldGetters));
@@ -307,7 +308,8 @@ public class LakeSoulKafkaAvroSink {
 
         final RowData.FieldGetter[] keyFieldGetters;
         RowType keyRowType;
-        int[] keyIndex;;
+        int[] keyIndex;
+        ;
 
         if (primaryKeys.size() > 0) {
             try {

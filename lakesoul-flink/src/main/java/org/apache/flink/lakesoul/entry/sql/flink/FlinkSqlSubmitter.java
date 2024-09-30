@@ -41,7 +41,7 @@ public class FlinkSqlSubmitter extends Submitter {
         if (lineageUrl != null) {
             conf.set(JobOptions.transportTypeOption, "http");
             conf.set(JobOptions.urlOption, lineageUrl);
-            conf.set(JobOptions.execAttach, true);
+            conf.set(JobOptions.execAttach, false);
         }
         EnvironmentSettings settings = null;
         StreamTableEnvironment tEnv = null;
@@ -63,7 +63,7 @@ public class FlinkSqlSubmitter extends Submitter {
             this.setCheckpoint(env);
         }
         if (lineageUrl != null) {
-            String appName = env.getConfiguration().get(JobOptions.KUBE_CLUSTER_ID);
+            String appName = FileUtil.getSubNameFromBatch(env.getConfiguration().get(JobOptions.KUBE_CLUSTER_ID));
             String namespace = System.getenv("LAKESOUL_CURRENT_DOMAIN");
             if (namespace == null) {
                 namespace = "lake-public";

@@ -27,6 +27,7 @@ import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.KafkaSourceBuilder;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.lakesoul.entry.sql.flink.LakeSoulInAndOutputJobListener;
+import org.apache.flink.lakesoul.entry.sql.utils.FileUtil;
 import org.apache.flink.lakesoul.sink.LakeSoulMultiTableSinkStreamBuilder;
 import org.apache.flink.lakesoul.tool.JobOptions;
 import org.apache.flink.lakesoul.tool.LakeSoulSinkOptions;
@@ -174,10 +175,10 @@ public class KafkaCdc {
         if (lineageUrl != null) {
             conf.set(JobOptions.transportTypeOption, "http");
             conf.set(JobOptions.urlOption, lineageUrl);
-            conf.set(JobOptions.execAttach, true);
+            conf.set(JobOptions.execAttach, false);
             conf.set(lineageOption, true);
             env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
-            appName = env.getConfiguration().get(JobOptions.KUBE_CLUSTER_ID);
+            appName = FileUtil.getSubNameFromBatch(env.getConfiguration().get(JobOptions.KUBE_CLUSTER_ID));
             namespace = System.getenv("LAKESOUL_CURRENT_DOMAIN");
             if (namespace == null) {
                 namespace = "public";
@@ -237,7 +238,7 @@ public class KafkaCdc {
             confs.put(linageJobName.key(), appName);
             confs.put(linageJobNamespace.key(), namespace);
             confs.put(lineageJobUUID.key(), listener.getRunId());
-            confs.put(lineageOption.key(),"true");
+            confs.put(lineageOption.key(), "true");
             context.conf = Configuration.fromMap(confs);
         } else {
             context.conf = (Configuration) env.getConfiguration();
