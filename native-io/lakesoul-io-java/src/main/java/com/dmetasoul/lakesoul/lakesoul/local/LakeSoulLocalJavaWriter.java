@@ -136,6 +136,8 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
 
 
     public void init(Map<String, String> params) throws IOException {
+        LOG.info(String.format("LakeSoulLocalJavaWriter init with params=%s", params));
+
         this.params = params;
         Preconditions.checkArgument(params.containsKey(PG_URL_KEY));
         Preconditions.checkArgument(params.containsKey(USERNAME_KEY));
@@ -160,6 +162,7 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
     }
 
     private void initNativeWriter() throws IOException {
+        LOG.info(String.format("LakeSoulLocalJavaWriter initNativeWriter with tableInfo=%s", tableInfo));
         nativeWriter = new NativeIOWriter(tableInfo);
 
         Schema arrowSchema = LakeSoulArrowUtils.cdcColumnAlignment(Schema.fromJSON(tableInfo.getTableSchema()), cdcColumn);
@@ -191,7 +194,7 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
     }
 
     public void writeDeleteRow(Object[] row) {
-        Preconditions.checkArgument(cdcColumn != null, "");
+        Preconditions.checkArgument(cdcColumn != null, "DeleteRow is not support for Non Cdc Table");
         Object[] delRow = new Object[row.length + 1];
         for (int i = 0; i < row.length; i++) {
             delRow[i] = row[i];
@@ -202,6 +205,7 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
 
 
     public void commit() throws IOException {
+        LOG.info(String.format("LakeSoulLocalJavaWriter commit batch size = %s, batch schema=%s", batch.getRowCount(), batch.getSchema().toJson()));
         this.arrowWriter.finish();
         this.nativeWriter.write(this.batch);
 
@@ -211,6 +215,7 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
             commitInfoList.add(createDataCommitInfo(entry.getKey(), entry.getValue()));
         }
 
+        LOG.info(String.format("Committing DataCommitInfo=%s", commitInfoList));
         for (DataCommitInfo commitInfo : commitInfoList) {
             dbManager.commitDataCommitInfo(commitInfo, Collections.emptyList());
         }
