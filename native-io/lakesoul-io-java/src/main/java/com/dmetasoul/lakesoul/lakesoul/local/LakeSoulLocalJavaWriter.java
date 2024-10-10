@@ -1,12 +1,14 @@
 package com.dmetasoul.lakesoul.lakesoul.local;
 
-import com.dmetasoul.lakesoul.lakesoul.local.arrow.ArrowBatchWriter;
+import com.dmetasoul.lakesoul.lakesoul.LakeSoulArrowUtils;
 import com.dmetasoul.lakesoul.lakesoul.io.NativeIOBase;
 import com.dmetasoul.lakesoul.lakesoul.io.NativeIOWriter;
+import com.dmetasoul.lakesoul.lakesoul.local.arrow.ArrowBatchWriter;
 import com.dmetasoul.lakesoul.meta.DBConfig;
 import com.dmetasoul.lakesoul.meta.DBManager;
 import com.dmetasoul.lakesoul.meta.DBUtil;
 import com.dmetasoul.lakesoul.meta.entity.*;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.arrow.util.Preconditions;
 import org.apache.arrow.vector.VectorSchemaRoot;
@@ -22,9 +24,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
-import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.util.*;
 
 import static com.dmetasoul.lakesoul.meta.DBConfig.TableInfoProperty;
@@ -71,6 +71,11 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
     // Key for S3 bucket
     public static final String S3_BUCKET = "s3.bucket";
 
+    // Key for lakesoul cdc column
+    public static final String CDC_COLUMN_KEY = "lakesoul.cdc.column";
+    // Default value for lakesoul cdc column
+    public static final String CDC_COLUMN_DEFAULT_VALUE = "rowKinds";
+
     // Key for memory limit of native writer
     public static final String MEM_LIMIT = "lakesoul.native_writer.mem_limit";
 
@@ -87,6 +92,8 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
     private TableInfo tableInfo;
     private DBManager dbManager;
     private Map<String, String> params;
+
+    String cdcColumn = null;
 
     public static void setIOConfigs(Map<String, String> conf, NativeIOBase io) {
 
@@ -140,6 +147,14 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
 
         tableInfo = dbManager.getTableInfoByName(params.get(TABLE_NAME));
 
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            Map<String, String> properties = mapper.readValue(tableInfo.getProperties(), Map.class);
+            cdcColumn = properties.get(DBConfig.TableInfoProperty.CDC_CHANGE_COLUMN);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
+
         initNativeWriter();
 
     }
@@ -147,7 +162,7 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
     private void initNativeWriter() throws IOException {
         nativeWriter = new NativeIOWriter(tableInfo);
 
-        Schema arrowSchema = Schema.fromJSON(tableInfo.getTableSchema());
+        Schema arrowSchema = LakeSoulArrowUtils.cdcColumnAlignment(Schema.fromJSON(tableInfo.getTableSchema()), cdcColumn);
 
         batch = VectorSchemaRoot.create(arrowSchema, nativeWriter.getAllocator());
         arrowWriter = ArrowBatchWriter.createWriter(batch);
@@ -162,8 +177,31 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
         this.totalRows++;
     }
 
+    public void writeAddRow(Object[] row) {
+        if (cdcColumn != null) {
+            Object[] addRow = new Object[row.length + 1];
+            for (int i = 0; i < row.length; i++) {
+                addRow[i] = row[i];
+            }
+            addRow[row.length] = "insert";
+            write(addRow);
+        } else {
+            write(row);
+        }
+    }
 
-    void commit() throws Exception {
+    public void writeDeleteRow(Object[] row) {
+        Preconditions.checkArgument(cdcColumn != null, "");
+        Object[] delRow = new Object[row.length + 1];
+        for (int i = 0; i < row.length; i++) {
+            delRow[i] = row[i];
+        }
+        delRow[row.length] = "delete";
+        write(delRow);
+    }
+
+
+    public void commit() throws IOException {
         this.arrowWriter.finish();
         this.nativeWriter.write(this.batch);
 
@@ -183,8 +221,14 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
         this.rowsInBatch = 0;
     }
 
-    private void recreateWriter() throws Exception {
-        close();
+    private void recreateWriter() throws IOException {
+        try {
+            close();
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
         initNativeWriter();
     }
 
@@ -353,6 +397,8 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
     public static void main(String[] args) throws Exception {
 
         DBManager meta = new DBManager();
+
+        boolean cdc = true;
         meta.cleanMeta();
         String tableId = "table_" + UUID.randomUUID();
         List<String> primaryKeys = Arrays.asList("id");
@@ -362,18 +408,34 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
                 primaryKeys,
                 partitionKeys
         );
-        List<Field> fields = Arrays.asList(
-                new Field("id", FieldType.nullable(new ArrowType.Int(32, true)), null)
-                , new Field("range", FieldType.nullable(new ArrowType.Int(32, true)), null)
-                , new Field("int", FieldType.nullable(new ArrowType.Int(32, true)), null)
-                , new Field("utf8", FieldType.nullable(new ArrowType.Utf8()), null)
-                , new Field("decimal", FieldType.nullable(ArrowType.Decimal.createDecimal(10, 3, null)), null)
-                , new Field("boolean", FieldType.nullable(new ArrowType.Bool()), null)
-                , new Field("date", FieldType.nullable(new ArrowType.Date(DateUnit.DAY)), null)
-                , new Field("datetimeSec", FieldType.nullable(new ArrowType.Timestamp(TimeUnit.SECOND, ZoneId.of("UTC").toString())), null)
-                , new Field("datetimeMilli", FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MILLISECOND, ZoneId.of("UTC").toString())), null)
 
-        );
+        List<Field> fields;
+        if (cdc) {
+            fields = Arrays.asList(
+                    new Field("id", FieldType.nullable(new ArrowType.Int(32, true)), null)
+                    , new Field("range", FieldType.nullable(new ArrowType.Int(32, true)), null)
+                    , new Field("int", FieldType.nullable(new ArrowType.Int(32, true)), null)
+                    , new Field("utf8", FieldType.nullable(new ArrowType.Utf8()), null)
+                    , new Field("decimal", FieldType.nullable(ArrowType.Decimal.createDecimal(10, 3, null)), null)
+                    , new Field("boolean", FieldType.nullable(new ArrowType.Bool()), null)
+                    , new Field("date", FieldType.nullable(new ArrowType.Date(DateUnit.DAY)), null)
+                    , new Field("datetimeSec", FieldType.nullable(new ArrowType.Timestamp(TimeUnit.SECOND, ZoneId.of("UTC").toString())), null)
+                    , new Field(TableInfoProperty.CDC_CHANGE_COLUMN_DEFAULT, FieldType.notNullable(new ArrowType.Utf8()), null)
+                    , new Field("datetimeMilli", FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MILLISECOND, ZoneId.of("UTC").toString())), null)
+            );
+        } else {
+            fields = Arrays.asList(
+                    new Field("id", FieldType.nullable(new ArrowType.Int(32, true)), null)
+                    , new Field("range", FieldType.nullable(new ArrowType.Int(32, true)), null)
+                    , new Field("int", FieldType.nullable(new ArrowType.Int(32, true)), null)
+                    , new Field("utf8", FieldType.nullable(new ArrowType.Utf8()), null)
+                    , new Field("decimal", FieldType.nullable(ArrowType.Decimal.createDecimal(10, 3, null)), null)
+                    , new Field("boolean", FieldType.nullable(new ArrowType.Bool()), null)
+                    , new Field("date", FieldType.nullable(new ArrowType.Date(DateUnit.DAY)), null)
+                    , new Field("datetimeSec", FieldType.nullable(new ArrowType.Timestamp(TimeUnit.SECOND, ZoneId.of("UTC").toString())), null)
+                    , new Field("datetimeMilli", FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MILLISECOND, ZoneId.of("UTC").toString())), null)
+            );
+        }
         Schema schema = new Schema(fields);
 
         ObjectMapper objectMapper = new ObjectMapper();
@@ -383,6 +445,11 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
             properties.put(TableInfoProperty.HASH_BUCKET_NUM, "4");
             properties.put("hashPartitions",
                     String.join(DBConfig.LAKESOUL_HASH_PARTITION_SPLITTER, primaryKeys));
+            if (cdc) {
+                properties.put(TableInfoProperty.USE_CDC, "true");
+                properties.put(TableInfoProperty.CDC_CHANGE_COLUMN,
+                        TableInfoProperty.CDC_CHANGE_COLUMN_DEFAULT);
+            }
         }
 
         meta.createTable(
@@ -409,15 +476,22 @@ public class LakeSoulLocalJavaWriter implements AutoCloseable {
             int numRows = 1024;
             int numCols = fields.size();
             for (int i = 0; i < numRows; i++) {
-                Object[] row = new Object[numCols];
-                for (int j = 0; j < numCols; j++) {
-                    if (fields.get(j).getName().contains("range")) {
-                        row[j] = i % ranges;
+                Object[] row = new Object[cdc ? numCols - 1 : numCols];
+                for (int j = 0, k = 0; j < numCols; j++) {
+                    if (fields.get(j).getName().contains(TableInfoProperty.CDC_CHANGE_COLUMN_DEFAULT)) {
+                        continue;
+                    } else if (fields.get(j).getName().contains("id")) {
+                        row[k++] = i;
+                    } else if (fields.get(j).getName().contains("range")) {
+                        row[k++] = i % ranges;
                     } else {
-                        row[j] = fields.get(j).getType().accept(ArrowTypeMockDataGenerator.INSTANCE);
+                        row[k++] = fields.get(j).getType().accept(ArrowTypeMockDataGenerator.INSTANCE);
                     }
                 }
-                localJavaWriter.write(row);
+                localJavaWriter.writeAddRow(row);
+                if (cdc && i % 7 == 0) {
+                    localJavaWriter.writeDeleteRow(row);
+                }
             }
             localJavaWriter.commit();
         }

@@ -4,6 +4,8 @@
 
 package com.dmetasoul.lakesoul.lakesoul.io;
 
+import com.dmetasoul.lakesoul.lakesoul.LakeSoulArrowUtils;
+import com.dmetasoul.lakesoul.meta.DBConfig;
 import com.dmetasoul.lakesoul.meta.DBUtil;
 import com.dmetasoul.lakesoul.meta.entity.TableInfo;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -37,8 +39,19 @@ public class NativeIOWriter extends NativeIOBase implements AutoCloseable {
 
     public NativeIOWriter(TableInfo tableInfo) {
         super("NativeWriter");
+
+        String cdcColumn;
         try {
-            setSchema(Schema.fromJSON(tableInfo.getTableSchema()));
+            ObjectMapper mapper = new ObjectMapper();
+            Map<String, String> properties = mapper.readValue(tableInfo.getProperties(), Map.class);
+            setHashBucketNum(Integer.parseInt(properties.get(HASH_BUCKET_NUM)));
+            cdcColumn = properties.get(DBConfig.TableInfoProperty.CDC_CHANGE_COLUMN);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
+        try {
+            Schema schema = Schema.fromJSON(tableInfo.getTableSchema());
+            setSchema(LakeSoulArrowUtils.cdcColumnAlignment(schema, cdcColumn));
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -47,14 +60,6 @@ public class NativeIOWriter extends NativeIOBase implements AutoCloseable {
         setRangePartitions(partitionKeys.rangeKeys);
         useDynamicPartition(true);
 
-        ObjectMapper mapper = new ObjectMapper();
-
-        try {
-            Map<String, Object> properties = mapper.readValue(tableInfo.getProperties(), Map.class);
-            setHashBucketNum(Integer.parseInt(properties.get(HASH_BUCKET_NUM).toString()));
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
-        }
 
         withPrefix(tableInfo.getTablePath());
 
@@ -166,7 +171,7 @@ public class NativeIOWriter extends NativeIOBase implements AutoCloseable {
 
     public static FlushResult decodeFlushResult(String encoded) {
         String[] fields = encoded.split("\u0003");
-        
+
         Preconditions.checkArgument(fields.length == 3);
         return new FlushResult(fields[0], Long.parseLong(fields[1]), fields[2]);
     }
