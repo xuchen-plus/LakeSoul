@@ -307,55 +307,55 @@ class LakeSoulTable(df: => Dataset[Row], snapshotManagement: SnapshotManagement)
 
   //by default, force perform compaction on whole table
   def compaction(): Unit = {
-    compaction("", true, Map.empty[String, Any], "", "", false)
+    compaction("", true, Map.empty[String, Any], "", "", false, None)
   }
 
   def compaction(cleanOldCompaction: Boolean): Unit = {
-    compaction("", true, Map.empty[String, Any], "", "", cleanOldCompaction)
+    compaction("", true, Map.empty[String, Any], "", "", cleanOldCompaction, None)
   }
 
   def compaction(condition: String): Unit = {
-    compaction(condition, true, Map.empty[String, Any], "", "", false)
+    compaction(condition, true, Map.empty[String, Any], "", "", false, None)
   }
 
   def compaction(condition: String, cleanOldCompaction: Boolean): Unit = {
-    compaction(condition, true, Map.empty[String, Any], "", "", cleanOldCompaction)
+    compaction(condition, true, Map.empty[String, Any], "", "", cleanOldCompaction, None)
   }
 
   def compaction(mergeOperatorInfo: Map[String, Any]): Unit = {
-    compaction("", true, mergeOperatorInfo, "", "", false)
+    compaction("", true, mergeOperatorInfo, "", "", false, None)
   }
 
   def compaction(condition: String,
                  mergeOperatorInfo: Map[String, Any]): Unit = {
-    compaction(condition, true, mergeOperatorInfo, "", "", false)
+    compaction(condition, true, mergeOperatorInfo, "", "", false, None)
   }
 
   def compaction(condition: String, hiveTableName: String): Unit = {
-    compaction(condition, true, Map.empty[String, Any], hiveTableName, "", false)
+    compaction(condition, true, Map.empty[String, Any], hiveTableName, "", false, None)
   }
 
   def compaction(condition: String, hiveTableName: String, hivePartitionName: String): Unit = {
-    compaction(condition, true, Map.empty[String, Any], hiveTableName, hivePartitionName, false)
+    compaction(condition, true, Map.empty[String, Any], hiveTableName, hivePartitionName, false, None)
   }
 
   def compaction(force: Boolean,
                  mergeOperatorInfo: Map[String, Any] = Map.empty[String, Any],
                  cleanOldCompaction: Boolean): Unit = {
-    compaction("", force, mergeOperatorInfo, "", "", cleanOldCompaction)
+    compaction("", force, mergeOperatorInfo, "", "", cleanOldCompaction, None)
   }
 
   def compaction(condition: String,
                  force: Boolean,
                  cleanOldCompaction: Boolean): Unit = {
-    compaction(condition, true, Map.empty[String, Any], "", "", cleanOldCompaction)
+    compaction(condition, true, Map.empty[String, Any], "", "", cleanOldCompaction, None)
   }
 
   def compaction(condition: String,
                  force: Boolean,
                  mergeOperatorInfo: java.util.Map[String, Any],
                  cleanOldCompaction: Boolean): Unit = {
-    compaction(condition, force, mergeOperatorInfo.asScala.toMap, "", "", cleanOldCompaction)
+    compaction(condition, force, mergeOperatorInfo.asScala.toMap, "", "", cleanOldCompaction, None)
   }
 
   def compaction(condition: String,
@@ -363,7 +363,8 @@ class LakeSoulTable(df: => Dataset[Row], snapshotManagement: SnapshotManagement)
                  mergeOperatorInfo: Map[String, Any],
                  hiveTableName: String,
                  hivePartitionName: String,
-                 cleanOldCompaction: Boolean): Unit = {
+                 cleanOldCompaction: Boolean,
+                 maxSnapshotsPerGroup: Option[Int]): Unit = {
     val newMergeOpInfo = mergeOperatorInfo.map(m => {
       val key =
         if (!m._1.startsWith(LakeSoulUtils.MERGE_OP_COL)) {
@@ -379,7 +380,7 @@ class LakeSoulTable(df: => Dataset[Row], snapshotManagement: SnapshotManagement)
       (key, value)
     })
 
-    executeCompaction(df, snapshotManagement, condition, force, newMergeOpInfo, hiveTableName, hivePartitionName, cleanOldCompaction)
+    executeCompaction(df, snapshotManagement, condition, force, newMergeOpInfo, hiveTableName, hivePartitionName, cleanOldCompaction, maxSnapshotsPerGroup)
   }
 
   def setCompactionTtl(days: Int): LakeSoulTable = {
