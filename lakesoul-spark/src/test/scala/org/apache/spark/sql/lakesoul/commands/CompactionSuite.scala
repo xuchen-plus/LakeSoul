@@ -4,6 +4,7 @@
 
 package org.apache.spark.sql.lakesoul.commands
 
+import com.dmetasoul.lakesoul.meta.SparkMetaVersion
 import com.dmetasoul.lakesoul.tables.LakeSoulTable
 import org.apache.hadoop.fs.Path
 import org.apache.spark.SparkConf
@@ -502,6 +503,68 @@ class CompactionSuite extends QueryTest
     }
   }
 
+  test("compaction with limited file group") {
+    withTempDir { tempDir =>
+      val tablePath = tempDir.getCanonicalPath
+      val spark = SparkSession.active
+
+      // 创建测试数据
+      val df = Seq(
+        (1, "2023-01-01", 10, 1),
+        (2, "2023-01-02", 20, 1),
+        (3, "2023-01-03", 30, 1),
+        (4, "2023-01-04", 40, 1),
+        (5, "2023-01-05", 50, 1)
+      ).toDF("id", "date", "value", "range")
+
+      // 写入初始数据
+      df.write
+        .format("lakesoul")
+        .option("rangePartitions", "range")
+        .option("hashPartitions", "id")
+        .option("hashBucketNum", "4")
+        .save(tablePath)
+
+      val lakeSoulTable = LakeSoulTable.forPath(tablePath)
+
+      // 模拟多次追加操作
+      for (i <- 1 to 10) {
+        val appendDf = Seq(
+          (i * 10, s"2023-02-0$i", i * 100, 1)
+        ).toDF("id", "date", "value", "range")
+        lakeSoulTable.upsert(appendDf)
+      }
+
+      // 获取初始的PartitionInfo数量
+      val initialPartitionInfoCount = getSnapshotCount(tablePath)
+
+      // 执行受限的Compaction操作 (每3个PartitionInfo一组)
+      lakeSoulTable.compaction(condition = "", force = true, mergeOperatorInfo = Map.empty,
+        hiveTableName = "", hivePartitionName = "", cleanOldCompaction = false,
+        maxSnapshotsPerGroup = None)
+
+      // 获取Compaction后的PartitionInfo数量
+      val compactedPartitionInfoCount = getSnapshotCount(tablePath)
+
+      // 验证结果
+      assert(compactedPartitionInfoCount < initialPartitionInfoCount,
+        s"Compaction应该减少PartitionInfo的数量，但是从${initialPartitionInfoCount}变为$compactedPartitionInfoCount")
+
+      assert(compactedPartitionInfoCount > 1,
+        s"Compaction应该产生多个PartitionInfo组，但只有${compactedPartitionInfoCount}个")
+
+      // 验证数据完整性
+      val compactedData = lakeSoulTable.toDF.orderBy("date", "id").collect()
+      assert(compactedData.length == 15, s"压缩后的数据应该有15行，但实际有${compactedData.length}行")
+    }
+  }
+
+  // 辅助方法：获取Snapshot的数量
+  def getSnapshotCount(tablePath: String): Int = {
+    val sm = SnapshotManagement(SparkUtil.makeQualifiedTablePath(new Path(tablePath)).toString)
+    var count = 0
+    SparkMetaVersion.getAllPartitionInfo(sm.getTableInfoOnly.table_id).foreach(p => count += p.read_files.length)
+    count
+  }
 
 }
-
