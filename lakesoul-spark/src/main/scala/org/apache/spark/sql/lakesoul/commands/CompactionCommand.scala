@@ -261,13 +261,11 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
       })
     }
     if (bucketNumChanged) {
-      snapshotManagement.withNewTransaction(tc => {
-        val newConfiguration = new mutable.HashMap[String, String]
-        newConfiguration ++= tableInfo.configuration
-        newConfiguration.put(TableInfoProperty.HASH_BUCKET_NUM, newBucketNum.get.toString)
-        val newTableInfo = tableInfo.copy(configuration = newConfiguration.toMap)
-        tc.updateTableInfo(newTableInfo)
-      })
+        val properties = SparkMetaVersion.dbManager.getTableInfoByTableId(tableInfo.table_id).getProperties
+        val newProperties = JSON.parseObject(properties);
+        newProperties.put(TableInfoProperty.HASH_BUCKET_NUM, newBucketNum.get.toString)
+        SparkMetaVersion.dbManager.updateTableProperties(tableInfo.table_id, newProperties.toJSONString)
+        snapshotManagement.updateSnapshot()
     }
     Seq.empty
   }
