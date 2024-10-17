@@ -4,7 +4,8 @@
 
 package org.apache.spark.sql.lakesoul.commands
 
-import com.dmetasoul.lakesoul.meta.{DataFileInfo, PartitionInfoScala, SparkMetaVersion}
+import com.dmetasoul.lakesoul.meta.entity.DataCommitInfo
+import com.dmetasoul.lakesoul.meta.{DBUtil, DataFileInfo, PartitionInfoScala, SparkMetaVersion}
 import com.dmetasoul.lakesoul.spark.clean.CleanOldCompaction.cleanOldCommitOpDiskData
 import org.apache.hadoop.fs.Path
 import org.apache.spark.internal.Logging
@@ -23,8 +24,9 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.apache.spark.sql.{Dataset, Row, SparkSession}
 import org.apache.spark.util.Utils
 
-import scala.collection.JavaConversions._
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
+import scala.collection.JavaConverters._
 
 case class CompactionCommand(snapshotManagement: SnapshotManagement,
                              conditionString: String,
@@ -32,10 +34,12 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
                              mergeOperatorInfo: Map[String, String],
                              hiveTableName: String = "",
                              hivePartitionName: String = "",
-                             cleanOldCompaction: Boolean
+                             cleanOldCompaction: Boolean,
+                             fileNumLimit: Option[Int] = None
                             )
   extends LeafRunnableCommand with PredicateHelper with Logging {
 
+  val compactPath = snapshotManagement.getTableInfoOnly.table_path.toString + "/compact_" + System.currentTimeMillis()
 
   def filterPartitionNeedCompact(spark: SparkSession,
                                  force: Boolean,
@@ -43,10 +47,10 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
     partitionInfo.read_files.length >= 1
   }
 
-  def executeCompaction(spark: SparkSession, tc: TransactionCommit, files: Seq[DataFileInfo], readPartitionInfo: Array[PartitionInfoScala]): Unit = {
+  def executeCompaction(spark: SparkSession, tc: TransactionCommit, files: Seq[DataFileInfo], readPartitionInfo: Array[PartitionInfoScala]): List[DataCommitInfo] = {
     if (readPartitionInfo.forall(p => p.commit_op.equals("CompactionCommit") && p.read_files.length == 1)) {
       logInfo("=========== All Partitions Have Compacted, This Operation Will Cancel!!! ===========")
-      return
+      return List.empty
     }
     val fileIndex = BatchDataSoulFileIndexV2(spark, snapshotManagement, files)
     val table = LakeSoulTableV2(
@@ -58,7 +62,7 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
       Option(mergeOperatorInfo)
     )
     val option = new CaseInsensitiveStringMap(
-      Map("basePath" -> tc.tableInfo.table_path_s.get, "isCompaction" -> "true"))
+      Map("basePath" -> tc.tableInfo.table_path_s.get, "isCompaction" -> "true").asJava)
 
     val partitionNames = readPartitionInfo.head.range_value.split(',').map(p => {
       p.split('=').head
@@ -93,34 +97,21 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
     )
 
     tc.setReadFiles(newReadFiles)
-    tc.setCommitType("compaction")
     val map = mutable.HashMap[String, String]()
     map.put("isCompaction", "true")
+    map.put("compactPath", compactPath)
     if (readPartitionInfo.nonEmpty) {
       map.put("partValue", readPartitionInfo.head.range_value)
     }
-    val (newFiles, path) = tc.writeFiles(compactDF, Some(new LakeSoulOptions(map.toMap, spark.sessionState.conf)), isCompaction = true)
-    tc.commit(newFiles, Seq.empty, readPartitionInfo)
-    val partitionStr = escapeSingleBackQuotedString(conditionString)
-    if (hiveTableName.nonEmpty) {
-      val spark = SparkSession.active
-      val currentCatalog = spark.sessionState.catalogManager.currentCatalog.name()
-      Utils.tryWithSafeFinally({
-        spark.sessionState.catalogManager.setCurrentCatalog(SESSION_CATALOG_NAME)
-        if (hivePartitionName.nonEmpty) {
-          spark.sql(s"ALTER TABLE $hiveTableName DROP IF EXISTS partition($hivePartitionName)")
-          spark.sql(s"ALTER TABLE $hiveTableName ADD partition($hivePartitionName) location '${path.toString}/$partitionStr'")
-        } else {
-          spark.sql(s"ALTER TABLE $hiveTableName DROP IF EXISTS partition($conditionString)")
-          spark.sql(s"ALTER TABLE $hiveTableName ADD partition($conditionString) location '${path.toString}/$partitionStr'")
-        }
-
-      }) {
-        spark.sessionState.catalogManager.setCurrentCatalog(currentCatalog)
+    if (tc.tableInfo.hash_partition_columns.nonEmpty) {
+      val headBucketId = files.head.file_bucket_id
+      if (files.forall(_.file_bucket_id == headBucketId)) {
+        map.put("staticBucketId", headBucketId.toString)
       }
     }
+    val (newFiles, path) = tc.writeFiles(compactDF, Some(new LakeSoulOptions(map.toMap, spark.sessionState.conf)), isCompaction = true)
 
-    logInfo("=========== Compaction Success!!! ===========")
+    tc.createDataCommitInfo(newFiles, Seq.empty, "", -1)._1
   }
 
   def escapeSingleBackQuotedString(str: String): String = {
@@ -135,6 +126,72 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
     builder.toString()
   }
 
+  def compactSinglePartition(sparkSession: SparkSession, tc: TransactionCommit, files: Seq[DataFileInfo], sourcePartition: PartitionInfoScala) = {
+    val bucketedFiles = if (tc.tableInfo.hash_partition_columns.isEmpty) {
+      Seq(-1 -> files)
+    } else {
+      files.groupBy(_.file_bucket_id)
+    }
+    println(bucketedFiles)
+    val allDataCommitInfo = bucketedFiles.flatMap(groupByBucketId => {
+      val (bucketId, files) = groupByBucketId
+      val groupedFiles = if (fileNumLimit.isDefined) {
+        val groupSize = fileNumLimit.get
+        val groupedFiles = new ArrayBuffer[Seq[DataFileInfo]]
+        for (i <- files.indices by groupSize) {
+          groupedFiles += files.slice(i, i + groupSize)
+        }
+        groupedFiles
+      } else {
+        Seq(files)
+      }
+
+      groupedFiles.flatMap(files => {
+        lazy val hasNoDeltaFile = if (force) {
+          false
+        } else {
+          files.forall(_.size == 1)
+        }
+        if (!hasNoDeltaFile) {
+          executeCompaction(sparkSession, tc, files, Array(sourcePartition))
+        } else {
+          logInfo(s"== Partition ${sourcePartition.range_value} has no delta file.")
+          None
+        }
+      })
+    })
+
+    val compactPartitionInfo = List.newBuilder[PartitionInfoScala]
+    compactPartitionInfo += PartitionInfoScala(
+      table_id = tc.tableInfo.table_id,
+      range_value = sourcePartition.range_value,
+      read_files = allDataCommitInfo.map(_.getCommitId).map(DBUtil.toJavaUUID).toArray
+    )
+
+    tc.commitDataCommitInfo(allDataCommitInfo.toList, compactPartitionInfo.result, "", -1, Array(sourcePartition))
+
+    val partitionStr = escapeSingleBackQuotedString(conditionString)
+    if (hiveTableName.nonEmpty) {
+      val spark = SparkSession.active
+      val currentCatalog = spark.sessionState.catalogManager.currentCatalog.name()
+      Utils.tryWithSafeFinally({
+        spark.sessionState.catalogManager.setCurrentCatalog(SESSION_CATALOG_NAME)
+        if (hivePartitionName.nonEmpty) {
+          spark.sql(s"ALTER TABLE $hiveTableName DROP IF EXISTS partition($hivePartitionName)")
+          spark.sql(s"ALTER TABLE $hiveTableName ADD partition($hivePartitionName) location '${compactPath}/$partitionStr'")
+        } else {
+          spark.sql(s"ALTER TABLE $hiveTableName DROP IF EXISTS partition($conditionString)")
+          spark.sql(s"ALTER TABLE $hiveTableName ADD partition($conditionString) location '${compactPath}/$partitionStr'")
+        }
+
+      }) {
+        spark.sessionState.catalogManager.setCurrentCatalog(currentCatalog)
+      }
+    }
+    logInfo("=========== Compaction Success!!! ===========")
+
+  }
+
   override def run(sparkSession: SparkSession): Seq[Row] = {
     val condition = conditionString match {
       case "" => None
@@ -147,8 +204,8 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
         splitConjunctivePredicates(condition.get)
 
       snapshotManagement.withNewTransaction(tc => {
+        tc.setCommitType("compaction")
         val files = tc.filterFiles(targetOnlyPredicates)
-
         //ensure only one partition execute compaction command
         val partitionSet = files.map(_.range_partitions).toSet
         if (partitionSet.isEmpty) {
@@ -157,25 +214,17 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
           throw LakeSoulErrors.partitionColumnNotFoundException(condition.get, partitionSet.size)
         }
 
-        lazy val hasNoDeltaFile = if (force) {
-          false
-        } else {
-          files.groupBy(_.file_bucket_id).forall(_._2.size == 1)
-        }
+        val partitionInfo = SparkMetaVersion.getSinglePartitionInfo(
+          snapshotManagement.getTableInfoOnly.table_id,
+          partitionSet.head,
+          ""
+        )
 
-        if (hasNoDeltaFile) {
-          logInfo("== Compaction: This partition has been compacted or has no delta file.")
-        } else {
-          val partitionInfo = SparkMetaVersion.getSinglePartitionInfo(
-            snapshotManagement.getTableInfoOnly.table_id,
-            partitionSet.head,
-            ""
-          )
-          executeCompaction(sparkSession, tc, files, Array(partitionInfo))
-          if (cleanOldCompaction) {
-            val tablePath = snapshotManagement.table_path
-            cleanOldCommitOpDiskData(tablePath, partitionSet.head, sparkSession)
-          }
+        compactSinglePartition(sparkSession, tc, files, partitionInfo)
+
+        if (cleanOldCompaction) {
+          val tablePath = snapshotManagement.table_path
+          cleanOldCommitOpDiskData(tablePath, partitionSet.head, sparkSession)
         }
 
       })
@@ -187,21 +236,14 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
 
       partitionsNeedCompact.foreach(part => {
         snapshotManagement.withNewTransaction(tc => {
+          tc.setCommitType("compaction")
           val files = tc.getCompactionPartitionFiles(part)
 
-          val hasNoDeltaFile = if (force) {
-            false
-          } else {
-            files.groupBy(_.file_bucket_id).forall(_._2.size == 1)
-          }
-          if (hasNoDeltaFile) {
-            logInfo(s"== Partition ${part.range_value} has no delta file.")
-          } else {
-            executeCompaction(sparkSession, tc, files, Array(part))
-            if (cleanOldCompaction) {
-              val tablePath = snapshotManagement.table_path
-              cleanOldCommitOpDiskData(tablePath, null, sparkSession)
-            }
+          compactSinglePartition(sparkSession, tc, files, part)
+
+          if (cleanOldCompaction) {
+            val tablePath = snapshotManagement.table_path
+            cleanOldCommitOpDiskData(tablePath, null, sparkSession)
           }
         })
       })
@@ -210,270 +252,3 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
   }
 
 }
-
-//// SPDX-FileCopyrightText: 2023 LakeSoul Contributors
-////
-//// SPDX-License-Identifier: Apache-2.0
-//
-//package org.apache.spark.sql.lakesoul.commands
-//
-//import com.dmetasoul.lakesoul.meta.entity.{DataCommitInfo, Uuid, CommitOp, DataFileOp, FileOp}
-//import com.dmetasoul.lakesoul.meta.{DBUtil, DataFileInfo, PartitionInfoScala, SparkMetaVersion}
-//import com.dmetasoul.lakesoul.spark.clean.CleanOldCompaction.cleanOldCommitOpDiskData
-//import org.apache.hadoop.fs.Path
-//import org.apache.spark.internal.Logging
-//import org.apache.spark.sql.catalyst.expressions.PredicateHelper
-//import org.apache.spark.sql.execution.command.LeafRunnableCommand
-//import org.apache.spark.sql.execution.datasources.v2.merge.MergeDeltaParquetScan
-//import org.apache.spark.sql.execution.datasources.v2.parquet.{NativeParquetScan, ParquetScan}
-//import org.apache.spark.sql.execution.datasources.v2.{DataSourceV2Relation, DataSourceV2ScanRelation}
-//import org.apache.spark.sql.functions.expr
-//import org.apache.spark.sql.lakesoul.catalog.LakeSoulTableV2
-//import org.apache.spark.sql.lakesoul.exception.LakeSoulErrors
-//import org.apache.spark.sql.lakesoul.{BatchDataSoulFileIndexV2, LakeSoulOptions, SnapshotManagement, TransactionCommit}
-//import org.apache.spark.sql.types.StructType
-//import org.apache.spark.sql.util.CaseInsensitiveStringMap
-//import org.apache.spark.sql.{Dataset, Row, SparkSession}
-//
-//import scala.collection.mutable
-//import scala.collection.mutable.ArrayBuffer
-//import scala.collection.JavaConverters._
-//import java.util.{UUID, ArrayList}
-//
-//case class CompactionCommand(snapshotManagement: SnapshotManagement,
-//                             conditionString: String,
-//                             force: Boolean,
-//                             mergeOperatorInfo: Map[String, String],
-//                             hiveTableName: String = "",
-//                             hivePartitionName: String = "",
-//                             cleanOldCompaction: Boolean,
-//                             maxSnapshotsPerGroup: Option[Int]
-//                            )
-//  extends LeafRunnableCommand with PredicateHelper with Logging {
-//
-//  def filterPartitionNeedCompact(spark: SparkSession,
-//                                 force: Boolean,
-//                                 partitionInfo: PartitionInfoScala): Boolean = {
-//    partitionInfo.read_files.length >= 1
-//  }
-//
-//  def executeCompaction(spark: SparkSession, tc: TransactionCommit, files: Seq[DataFileInfo], readPartitionInfo: Array[PartitionInfoScala]): DataCommitInfo = {
-//
-//    val fileIndex = BatchDataSoulFileIndexV2(spark, snapshotManagement, files)
-//    val table = LakeSoulTableV2(
-//      spark,
-//      new Path(snapshotManagement.table_path),
-//      None,
-//      None,
-//      Option(fileIndex),
-//      Option(mergeOperatorInfo)
-//    )
-//    val option = new CaseInsensitiveStringMap(
-//      Map("basePath" -> tc.tableInfo.table_path_s.get, "isCompaction" -> "true").asJava)
-//
-//    val partitionNames = readPartitionInfo.head.range_value.split(',').map(p => {
-//      p.split('=').head
-//    })
-//
-//    val scan = table.newScanBuilder(option).build()
-//    val newReadFiles = if (scan.isInstanceOf[ParquetScan] || scan.isInstanceOf[NativeParquetScan]) {
-//      fileIndex.getFileInfo(Nil)
-//    } else {
-//      scan.asInstanceOf[MergeDeltaParquetScan].newFileIndex.getFileInfo(Nil)
-//    }
-//
-//    val tableSchemaWithoutPartitions = StructType(table.schema().filter(f => {
-//      !partitionNames.contains(f.name)
-//    }))
-//
-//    val v2Relation = DataSourceV2Relation(
-//      table,
-//      tableSchemaWithoutPartitions.toAttributes,
-//      None,
-//      None,
-//      option
-//    )
-//
-//    val compactDF = Dataset.ofRows(
-//      spark,
-//      DataSourceV2ScanRelation(
-//        v2Relation,
-//        scan,
-//        tableSchemaWithoutPartitions.toAttributes
-//      )
-//    )
-//
-//    tc.setReadFiles(newReadFiles)
-//    val map = mutable.HashMap[String, String]()
-//    map.put("isCompaction", "true")
-//    if (readPartitionInfo.nonEmpty) {
-//      map.put("partValue", readPartitionInfo.head.range_value)
-//    }
-//    val (newFiles, path) = tc.writeFiles(compactDF, Some(new LakeSoulOptions(map.toMap, spark.sessionState.conf)), isCompaction = true)
-//    tc.createDataCommitInfo(newFiles, Seq.empty, readPartitionInfo)
-//
-//    val fileOps = new ArrayList[DataFileOp]()
-//    newFiles.foreach { file =>
-//      fileOps.add(DataFileOp.newBuilder()
-//        .setPath(file.path)
-//        .setFileOp(FileOp.add)
-//        .setSize(file.size)
-//        .setFileExistCols(file.file_exist_cols)
-//        .build())
-//    }
-//
-//    val commitId = DBUtil.toProtoUuid(UUID.randomUUID())
-//
-//    DataCommitInfo.newBuilder()
-//      .setTableId(tc.tableInfo.table_id)
-//      .setPartitionDesc(readPartitionInfo.head.range_value)
-//      .setCommitId(commitId)
-//      .addAllFileOps(fileOps)
-//      .setCommitOp(CommitOp.CompactionCommit)
-//      .setTimestamp(System.currentTimeMillis())
-//      .setCommitted(false)
-//      .setDomain("") // 如果需要设置 domain,请替换为适当的值
-//      .build()
-//  }
-//
-//  def escapeSingleBackQuotedString(str: String): String = {
-//    val builder = mutable.StringBuilder.newBuilder
-//
-//    str.foreach {
-//      case '\'' => ""
-//      case '`' => ""
-//      case ch => builder += ch
-//    }
-//
-//    builder.toString()
-//  }
-//
-//  override def run(sparkSession: SparkSession): Seq[Row] = {
-//    val condition = conditionString match {
-//      case "" => None
-//      case _: String => Option(expr(conditionString).expr)
-//    }
-//    //when condition is defined, only one partition need compaction,
-//    //else we will check whole table
-//    if (condition.isDefined) {
-//      val targetOnlyPredicates =
-//        splitConjunctivePredicates(condition.get)
-//
-//      snapshotManagement.withNewTransaction(tc => {
-//        tc.setCommitType("compaction")
-//        val files = tc.filterFiles(targetOnlyPredicates)
-//        //ensure only one partition execute compaction command
-//        val partitionSet = files.map(_.range_partitions).toSet
-//        if (partitionSet.isEmpty) {
-//          throw LakeSoulErrors.partitionColumnNotFoundException(condition.get, 0)
-//        } else if (partitionSet.size > 1) {
-//          throw LakeSoulErrors.partitionColumnNotFoundException(condition.get, partitionSet.size)
-//        }
-//
-//        lazy val hasNoDeltaFile = if (force) {
-//          false
-//        } else {
-//          files.groupBy(_.file_bucket_id).forall(_._2.size == 1)
-//        }
-//
-//        val groupedFiles = if (maxSnapshotsPerGroup.isDefined) {
-//          val groupSize = maxSnapshotsPerGroup.get
-//          var groupedFiles = new ArrayBuffer[Seq[DataFileInfo]]
-//          for (i <- files.indices by groupSize) {
-//            groupedFiles += files.slice(i, i + groupSize)
-//          }
-//          groupedFiles.toSeq
-//        } else {
-//          Seq(files)
-//        }
-//
-//
-//        val allDataCommitInfo = groupedFiles.flatMap(files => {
-//          if (!hasNoDeltaFile) {
-//            val partitionInfo = SparkMetaVersion.getSinglePartitionInfo(
-//              snapshotManagement.getTableInfoOnly.table_id,
-//              partitionSet.head,
-//              ""
-//            )
-//            if (partitionInfo.commit_op.equals("CompactionCommit") && partitionInfo.read_files.length == 1) {
-//              logInfo("=========== All Partitions Have Compacted, This Operation Will Cancel!!! ===========")
-//              None
-//            } else {
-//              Some(executeCompaction(sparkSession, tc, files, Array(partitionInfo)))
-//            }
-//          } else {
-//            logInfo("== Compaction: This partition has been compacted or has no delta file.")
-//            None
-//          }
-//        })
-//
-//        // 提交所有的 DataCommitInfo
-//        tc.commitDataCommitInfo(allDataCommitInfo.toList, Array.empty[PartitionInfoScala].toList, "", 0, Array.empty[PartitionInfoScala])
-//
-//        if (cleanOldCompaction) {
-//          val tablePath = snapshotManagement.table_path
-//          cleanOldCommitOpDiskData(tablePath, partitionSet.head, sparkSession)
-//        }
-//
-//      })
-//    } else {
-//
-//      val allInfo = SparkMetaVersion.getAllPartitionInfo(snapshotManagement.getTableInfoOnly.table_id)
-//      val partitionsNeedCompact = allInfo
-//        .filter(filterPartitionNeedCompact(sparkSession, force, _))
-//
-//      partitionsNeedCompact.foreach(part => {
-//        snapshotManagement.withNewTransaction(tc => {
-//          tc.setCommitType("compaction")
-//          val files = tc.getCompactionPartitionFiles(part)
-//          lazy val hasNoDeltaFile = if (force) {
-//            false
-//          } else {
-//            files.groupBy(_.file_bucket_id).forall(_._2.size == 1)
-//          }
-//
-//          val groupedFiles = if (maxSnapshotsPerGroup.isDefined) {
-//            val groupSize = maxSnapshotsPerGroup.get
-//            var groupedFiles = new ArrayBuffer[Seq[DataFileInfo]]
-//            for (i <- files.indices by groupSize) {
-//              groupedFiles += files.slice(i, i + groupSize)
-//            }
-//            groupedFiles.toSeq
-//          } else {
-//            Seq(files)
-//          }
-//
-//
-//          val allDataCommitInfo = groupedFiles.flatMap(files => {
-//            if (!hasNoDeltaFile) {
-//              val partitionInfo = SparkMetaVersion.getSinglePartitionInfo(
-//                snapshotManagement.getTableInfoOnly.table_id,
-//                part.range_value,
-//                ""
-//              )
-//              if (partitionInfo.commit_op.equals("CompactionCommit") && partitionInfo.read_files.length == 1) {
-//                logInfo("=========== All Partitions Have Compacted, This Operation Will Cancel!!! ===========")
-//                None
-//              } else {
-//                Some(executeCompaction(sparkSession, tc, files, Array(partitionInfo)))
-//              }
-//            } else {
-//              logInfo(s"== Partition ${part.range_value} has no delta file.")
-//              None
-//            }
-//          })
-//
-//          // 提交所有的 DataCommitInfo
-//          tc.commitDataCommitInfo(allDataCommitInfo.toList, Array.empty[PartitionInfoScala].toList, "", 0, Array(part))
-//
-//          if (cleanOldCompaction) {
-//            val tablePath = snapshotManagement.table_path
-//            cleanOldCommitOpDiskData(tablePath, part.range_value, sparkSession)
-//          }
-//        })
-//      })
-//    }
-//    Seq.empty
-//  }
-//
-//}
