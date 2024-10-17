@@ -4,6 +4,8 @@
 
 package org.apache.spark.sql.lakesoul.commands
 
+import com.alibaba.fastjson.JSON
+import com.dmetasoul.lakesoul.meta.DBConfig.TableInfoProperty
 import com.dmetasoul.lakesoul.meta.entity.DataCommitInfo
 import com.dmetasoul.lakesoul.meta.{DBUtil, DataFileInfo, PartitionInfoScala, SparkMetaVersion}
 import com.dmetasoul.lakesoul.spark.clean.CleanOldCompaction.cleanOldCommitOpDiskData
@@ -18,6 +20,7 @@ import org.apache.spark.sql.execution.datasources.v2.{DataSourceV2Relation, Data
 import org.apache.spark.sql.functions.expr
 import org.apache.spark.sql.lakesoul.catalog.LakeSoulTableV2
 import org.apache.spark.sql.lakesoul.exception.LakeSoulErrors
+import org.apache.spark.sql.lakesoul.utils.TableInfo
 import org.apache.spark.sql.lakesoul.{BatchDataSoulFileIndexV2, LakeSoulOptions, SnapshotManagement, TransactionCommit}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
@@ -27,6 +30,7 @@ import org.apache.spark.util.Utils
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.JavaConverters._
+import scala.util.parsing.json.JSON.headOptionTailToFunList
 
 case class CompactionCommand(snapshotManagement: SnapshotManagement,
                              conditionString: String,
@@ -35,11 +39,16 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
                              hiveTableName: String = "",
                              hivePartitionName: String = "",
                              cleanOldCompaction: Boolean,
-                             fileNumLimit: Option[Int] = None
+                             fileNumLimit: Option[Int] = None,
+                             newBucketNum: Option[Int] = None
                             )
   extends LeafRunnableCommand with PredicateHelper with Logging {
 
-  val compactPath = snapshotManagement.getTableInfoOnly.table_path.toString + "/compact_" + System.currentTimeMillis()
+  lazy val compactPath: String = tableInfo.table_path.toString + "/compact_" + System.currentTimeMillis()
+
+  lazy val bucketNumChanged: Boolean = newBucketNum.exists(tableInfo.bucket_num != _)
+
+  lazy val tableInfo: TableInfo = snapshotManagement.getTableInfoOnly
 
   def filterPartitionNeedCompact(spark: SparkSession,
                                  force: Boolean,
@@ -95,6 +104,7 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
         tableSchemaWithoutPartitions.toAttributes
       )
     )
+    compactDF.show
 
     tc.setReadFiles(newReadFiles)
     val map = mutable.HashMap[String, String]()
@@ -109,6 +119,11 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
         map.put("staticBucketId", headBucketId.toString)
       }
     }
+    if (bucketNumChanged) {
+      map.put("newBucketNum", newBucketNum.get.toString)
+    }
+    println(map)
+
     val (newFiles, path) = tc.writeFiles(compactDF, Some(new LakeSoulOptions(map.toMap, spark.sessionState.conf)), isCompaction = true)
 
     tc.createDataCommitInfo(newFiles, Seq.empty, "", -1)._1
@@ -132,7 +147,6 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
     } else {
       files.groupBy(_.file_bucket_id)
     }
-    println(bucketedFiles)
     val allDataCommitInfo = bucketedFiles.flatMap(groupByBucketId => {
       val (bucketId, files) = groupByBucketId
       val groupedFiles = if (fileNumLimit.isDefined) {
@@ -215,7 +229,7 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
         }
 
         val partitionInfo = SparkMetaVersion.getSinglePartitionInfo(
-          snapshotManagement.getTableInfoOnly.table_id,
+          tableInfo.table_id,
           partitionSet.head,
           ""
         )
@@ -230,7 +244,7 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
       })
     } else {
 
-      val allInfo = SparkMetaVersion.getAllPartitionInfo(snapshotManagement.getTableInfoOnly.table_id)
+      val allInfo = SparkMetaVersion.getAllPartitionInfo(tableInfo.table_id)
       val partitionsNeedCompact = allInfo
         .filter(filterPartitionNeedCompact(sparkSession, force, _))
 
@@ -246,6 +260,15 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
             cleanOldCommitOpDiskData(tablePath, null, sparkSession)
           }
         })
+      })
+    }
+    if (bucketNumChanged) {
+      snapshotManagement.withNewTransaction(tc => {
+        val newConfiguration = new mutable.HashMap[String, String]
+        newConfiguration ++= tableInfo.configuration
+        newConfiguration.put(TableInfoProperty.HASH_BUCKET_NUM, newBucketNum.get.toString)
+        val newTableInfo = tableInfo.copy(configuration = newConfiguration.toMap)
+        tc.updateTableInfo(newTableInfo)
       })
     }
     Seq.empty
