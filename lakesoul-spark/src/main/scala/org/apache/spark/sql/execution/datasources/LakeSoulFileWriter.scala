@@ -145,6 +145,7 @@ object LakeSoulFileWriter extends Logging {
     val isCompaction = caseInsensitiveOptions.getOrElse("isCompaction", "false").toBoolean
     val staticBucketId = caseInsensitiveOptions.getOrElse("staticBucketId", "-1").toInt
 
+    val isBucketNumChanged = caseInsensitiveOptions.getOrElse("isBucketNumChanged", "false").toBoolean
     // We should first sort by partition columns, then bucket id, and finally sorting columns.
     val requiredOrdering =
       partitionColumns ++ writerBucketSpec.map(_.bucketIdExpression) ++ sortColumns
@@ -174,7 +175,7 @@ object LakeSoulFileWriter extends Logging {
     val nativeIOEnable = sparkSession.sessionState.conf.getConf(LakeSoulSQLConf.NATIVE_IO_ENABLE)
 
     def nativeWrap(plan: SparkPlan): RDD[InternalRow] = {
-      if (isCompaction && !isCDC && nativeIOEnable) {
+      if (isCompaction && !isCDC && !isBucketNumChanged && nativeIOEnable) {
         plan match {
           case withPartitionAndOrdering(_, _, child) =>
             return nativeWrap(child)
@@ -198,7 +199,7 @@ object LakeSoulFileWriter extends Logging {
 
     try {
       // for compaction, we won't break ordering from batch scan
-      val (rdd, concurrentOutputWriterSpec) = if (orderingMatched || isCompaction) {
+      val (rdd, concurrentOutputWriterSpec) = if (!isBucketNumChanged && (orderingMatched || isCompaction)) {
         (nativeWrap(empty2NullPlan), None)
       } else {
         // SPARK-21165: the `requiredOrdering` is based on the attributes from analyzed plan, and
@@ -308,13 +309,14 @@ object LakeSoulFileWriter extends Logging {
     committer.setupTask(taskAttemptContext)
 
     val isCompaction = options.getOrElse("isCompaction", "false").toBoolean
+    val isBucketNumChanged = options.getOrElse("isBucketNumChanged", "false").toBoolean
 
     val dataWriter =
       if (!iterator.hasNext) {
         new EmptyDirectoryDataWriter(description, taskAttemptContext, committer)
       } else if (description.partitionColumns.isEmpty && description.bucketSpec.isEmpty && !isCompaction) {
         new SingleDirectoryDataWriter(description, taskAttemptContext, committer)
-      } else if (isCompaction) {
+      } else if (isCompaction && !isBucketNumChanged) {
         new StaticPartitionedDataWriter(description, taskAttemptContext, committer, options, sparkPartitionId, bucketSpec)
       } else {
         concurrentOutputWriterSpec match {

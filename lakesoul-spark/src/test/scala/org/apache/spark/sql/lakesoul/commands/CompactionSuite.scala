@@ -18,6 +18,7 @@ import org.apache.spark.sql.lakesoul.test.{LakeSoulSQLCommandTest, LakeSoulTestS
 import org.apache.spark.sql.lakesoul.utils.SparkUtil
 import org.apache.spark.sql.test.{SharedSparkSession, TestSparkSession}
 import org.apache.spark.sql.{AnalysisException, QueryTest, Row, SparkSession}
+import org.apache.spark.util.Utils
 import org.junit.runner.RunWith
 import org.scalatest.BeforeAndAfterEach
 import org.scalatestplus.junit.JUnitRunner
@@ -550,10 +551,10 @@ class CompactionSuite extends QueryTest
         println(s"before compact initialPartitionInfoCount=$initialFileCount")
         lakeSoulTable.toDF.show
 
-        // Perform limited compaction (group every 3 PartitionInfo)
+        // Perform limited compaction (group every compactGroupSize PartitionInfo)
         lakeSoulTable.compaction(condition = "", force = true, mergeOperatorInfo = Map.empty,
           hiveTableName = "", hivePartitionName = "", cleanOldCompaction = false,
-          fileNumLimit = Some(compactGroupSize))
+          fileNumLimit = Some(compactGroupSize), newBucketNum = None)
 
         // Get PartitionInfo count after compaction
         val compactedFileCount = getFileCount(tablePath)
@@ -587,6 +588,67 @@ class CompactionSuite extends QueryTest
     val partitionList = SparkMetaVersion.getAllPartitionInfo(sm.getTableInfoOnly.table_id)
     val files = DataOperation.getTableDataInfo(partitionList)
     files.length
+  }
+
+  test("compaction with newBucketNum") {
+    //    withTempDir { tempDir =>
+    val tempDir = Utils.createDirectory(System.getProperty("java.io.tmpdir"))
+    val tablePath = tempDir.getCanonicalPath
+    val spark = SparkSession.active
+
+    val hashBucketNum = 4
+    val newHashBucketNum = 7
+    val compactRounds = 5
+    val dataPerRounds = 10
+    val compactGroupSize = 3
+
+    // Create test data
+    val df = Seq(
+      (1, "2023-01-01", 10, 1),
+      (2, "2023-01-02", 20, 1),
+      (3, "2023-01-03", 30, 1),
+      (4, "2023-01-04", 40, 1),
+      (5, "2023-01-05", 50, 1)
+    ).toDF("id", "date", "value", "range")
+
+    // Write initial data
+    df.write
+      .format("lakesoul")
+      .option("rangePartitions", "range")
+      .option("hashPartitions", "id")
+      .option(SHORT_TABLE_NAME, "rebucket_table")
+      .option("hashBucketNum", hashBucketNum.toString)
+      .save(tablePath)
+
+    val lakeSoulTable = LakeSoulTable.forPath(tablePath)
+
+    for (i <- 1 to 100) {
+      val appendDf = Seq(
+        (i * 10, s"2023-02-0$i", i * 100, 1)
+      ).toDF("id", "date", "value", "range")
+      lakeSoulTable.upsert(appendDf)
+    }
+    assert(getFileBucketSet(tablePath).size == hashBucketNum)
+
+    lakeSoulTable.compaction(condition = "", force = true, mergeOperatorInfo = Map.empty,
+      hiveTableName = "", hivePartitionName = "", cleanOldCompaction = false,
+      fileNumLimit = None, newBucketNum = Some(newHashBucketNum))
+
+    assert(getFileBucketSet(tablePath).size == newHashBucketNum)
+    val compactedData = lakeSoulTable.toDF.orderBy("id", "date").collect()
+    println(compactedData.mkString("Array(", ", ", ")"))
+    assert(compactedData.length == 105, s"The compressed data should have ${105} rows, but it actually has ${compactedData.length} rows")
+
+    //    }
+  }
+
+  // Auxiliary method: Get the bucket number of table
+  def getFileBucketSet(tablePath: String): Set[Int] = {
+    val sm = SnapshotManagement(SparkUtil.makeQualifiedTablePath(new Path(tablePath)).toString)
+    val partitionList = SparkMetaVersion.getAllPartitionInfo(sm.getTableInfoOnly.table_id)
+    val files = DataOperation.getTableDataInfo(partitionList)
+    println(files.mkString("Array(", ", ", ")"))
+    files.groupBy(_.file_bucket_id).keys.toSet
   }
 
 }
