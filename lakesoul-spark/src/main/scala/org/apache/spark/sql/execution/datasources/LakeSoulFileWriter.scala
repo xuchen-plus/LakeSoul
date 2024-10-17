@@ -316,7 +316,7 @@ object LakeSoulFileWriter extends Logging {
         new EmptyDirectoryDataWriter(description, taskAttemptContext, committer)
       } else if (description.partitionColumns.isEmpty && description.bucketSpec.isEmpty && !isCompaction) {
         new SingleDirectoryDataWriter(description, taskAttemptContext, committer)
-      } else if (isCompaction && !isBucketNumChanged) {
+      } else if (isCompaction) {
         new StaticPartitionedDataWriter(description, taskAttemptContext, committer, options, sparkPartitionId, bucketSpec)
       } else {
         concurrentOutputWriterSpec match {

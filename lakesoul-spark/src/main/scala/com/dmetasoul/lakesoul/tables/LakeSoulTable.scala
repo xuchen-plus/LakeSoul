@@ -310,70 +310,18 @@ class LakeSoulTable(df: => Dataset[Row], snapshotManagement: SnapshotManagement)
     compaction("", true, Map.empty[String, Any], "", "", false, None, None)
   }
 
-  def compaction(fileNumLimit: Option[Int]): Unit = {
-    compaction("", true, Map.empty[String, Any], "", "", false, fileNumLimit, None)
-  }
-
-  def compaction(cleanOldCompaction: Boolean): Unit = {
-    compaction("", true, Map.empty[String, Any], "", "", cleanOldCompaction, None, None)
-  }
-
   def compaction(condition: String): Unit = {
-    compaction(condition, true, Map.empty[String, Any], "", "", false, None, None)
+    compaction(condition = condition, true)
   }
 
-  def compaction(condition: String, cleanOldCompaction: Boolean): Unit = {
-    compaction(condition, true, Map.empty[String, Any], "", "", cleanOldCompaction, None, None)
-  }
-
-  def compaction(condition: String, cleanOldCompaction: Boolean, fileNumLimit: Option[Int]): Unit = {
-    compaction(condition, true, Map.empty[String, Any], "", "", cleanOldCompaction, fileNumLimit, None)
-  }
-
-  def compaction(mergeOperatorInfo: Map[String, Any]): Unit = {
-    compaction("", true, mergeOperatorInfo, "", "", false, None, None)
-  }
-
-  def compaction(condition: String,
-                 mergeOperatorInfo: Map[String, Any]): Unit = {
-    compaction(condition, true, mergeOperatorInfo, "", "", false, None, None)
-  }
-
-  def compaction(condition: String, hiveTableName: String): Unit = {
-    compaction(condition, true, Map.empty[String, Any], hiveTableName, "", false, None, None)
-  }
-
-  def compaction(condition: String, hiveTableName: String, hivePartitionName: String): Unit = {
-    compaction(condition, true, Map.empty[String, Any], hiveTableName, hivePartitionName, false, None, None)
-  }
-
-  def compaction(force: Boolean,
-                 mergeOperatorInfo: Map[String, Any] = Map.empty[String, Any],
-                 cleanOldCompaction: Boolean): Unit = {
-    compaction("", force, mergeOperatorInfo, "", "", cleanOldCompaction, None, None)
-  }
-
-  def compaction(condition: String,
-                 force: Boolean,
-                 cleanOldCompaction: Boolean): Unit = {
-    compaction(condition, true, Map.empty[String, Any], "", "", cleanOldCompaction, None, None)
-  }
-
-  def compaction(condition: String,
-                 force: Boolean,
-                 mergeOperatorInfo: java.util.Map[String, Any],
-                 cleanOldCompaction: Boolean): Unit = {
-    compaction(condition, force, mergeOperatorInfo.asScala.toMap, "", "", cleanOldCompaction, None, None)
-  }
-
-  def compaction(condition: String,
-                 force: Boolean,
-                 mergeOperatorInfo: Map[String, Any],
-                 hiveTableName: String,
-                 hivePartitionName: String,
-                 cleanOldCompaction: Boolean,
-                 fileNumLimit: Option[Int],
-                 newBucketNum: Option[Int]
+  def compaction(condition: String = "",
+                 force: Boolean = true,
+                 mergeOperatorInfo: Map[String, Any] = Map.empty,
+                 hiveTableName: String = "",
+                 hivePartitionName: String = "",
+                 cleanOldCompaction: Boolean = false,
+                 fileNumLimit: Option[Int] = None,
+                 newBucketNum: Option[Int] = None,
                 ): Unit = {
     val newMergeOpInfo = mergeOperatorInfo.map(m => {
       val key =

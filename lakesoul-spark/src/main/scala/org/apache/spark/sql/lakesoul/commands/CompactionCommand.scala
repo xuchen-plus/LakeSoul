@@ -17,7 +17,7 @@ import org.apache.spark.sql.execution.command.LeafRunnableCommand
 import org.apache.spark.sql.execution.datasources.v2.merge.MergeDeltaParquetScan
 import org.apache.spark.sql.execution.datasources.v2.parquet.{NativeParquetScan, ParquetScan}
 import org.apache.spark.sql.execution.datasources.v2.{DataSourceV2Relation, DataSourceV2ScanRelation}
-import org.apache.spark.sql.functions.expr
+import org.apache.spark.sql.functions.{expr, forall}
 import org.apache.spark.sql.lakesoul.catalog.LakeSoulTableV2
 import org.apache.spark.sql.lakesoul.exception.LakeSoulErrors
 import org.apache.spark.sql.lakesoul.utils.TableInfo
@@ -30,7 +30,6 @@ import org.apache.spark.util.Utils
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.JavaConverters._
-import scala.util.parsing.json.JSON.headOptionTailToFunList
 
 case class CompactionCommand(snapshotManagement: SnapshotManagement,
                              conditionString: String,
@@ -104,7 +103,6 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
         tableSchemaWithoutPartitions.toAttributes
       )
     )
-    compactDF.show
 
     tc.setReadFiles(newReadFiles)
     val map = mutable.HashMap[String, String]()
@@ -113,16 +111,15 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
     if (readPartitionInfo.nonEmpty) {
       map.put("partValue", readPartitionInfo.head.range_value)
     }
-    if (tc.tableInfo.hash_partition_columns.nonEmpty) {
+    if (bucketNumChanged) {
+      map.put("newBucketNum", newBucketNum.get.toString)
+    } else if (tableInfo.hash_partition_columns.nonEmpty) {
       val headBucketId = files.head.file_bucket_id
       if (files.forall(_.file_bucket_id == headBucketId)) {
         map.put("staticBucketId", headBucketId.toString)
       }
     }
-    if (bucketNumChanged) {
-      map.put("newBucketNum", newBucketNum.get.toString)
-    }
-    println(map)
+    logInfo(s"write CompactData with Option=$map")
 
     val (newFiles, path) = tc.writeFiles(compactDF, Some(new LakeSoulOptions(map.toMap, spark.sessionState.conf)), isCompaction = true)
 
@@ -142,7 +139,8 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
   }
 
   def compactSinglePartition(sparkSession: SparkSession, tc: TransactionCommit, files: Seq[DataFileInfo], sourcePartition: PartitionInfoScala) = {
-    val bucketedFiles = if (tc.tableInfo.hash_partition_columns.isEmpty) {
+    logInfo(s"Compacting Single Partition=${sourcePartition} with ${files.length} files")
+    val bucketedFiles = if (tableInfo.hash_partition_columns.isEmpty || bucketNumChanged) {
       Seq(-1 -> files)
     } else {
       files.groupBy(_.file_bucket_id)
