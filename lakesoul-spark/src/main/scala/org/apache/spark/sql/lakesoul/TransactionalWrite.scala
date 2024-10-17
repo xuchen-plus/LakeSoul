@@ -128,7 +128,13 @@ trait TransactionalWrite {
     val hashPartitionSchema = tableInfo.hash_partition_schema
     var outputPath = SparkUtil.makeQualifiedTablePath(tableInfo.table_path)
     if (isCompaction) {
-      outputPath = SparkUtil.makeQualifiedTablePath(new Path(tableInfo.table_path.toString + "/compact_" + System.currentTimeMillis()))
+
+      val compactPath = if (writeOptions.isDefined) {
+        writeOptions.get.options.getOrElse("compactPath", tableInfo.table_path.toString + "/compact_" + System.currentTimeMillis())
+      } else {
+        tableInfo.table_path.toString + "/compact_" + System.currentTimeMillis()
+      }
+      outputPath = SparkUtil.makeQualifiedTablePath(new Path(compactPath))
     }
     val dc = if (isCompaction) {
       val cdcCol = snapshot.getTableInfo.configuration.get(LakeSoulTableProperties.lakeSoulCDCChangePropKey)

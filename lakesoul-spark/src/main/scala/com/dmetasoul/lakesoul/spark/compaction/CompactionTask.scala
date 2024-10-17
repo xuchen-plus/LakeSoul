@@ -96,14 +96,14 @@ object CompactionTask {
         println("------ " + threadName + " is compressing table path is: " + path + " ------")
         val table = LakeSoulTable.forPath(path)
         if (partitionDesc == "") {
-          table.compaction()
+          table.compaction(fileNumLimit = Some(100))
         } else {
           val partitions = partitionDesc.split(",").map(
             partition => {
               partition.replace("=", "='") + "'"
             }
           ).mkString(" and ")
-          table.compaction(partitions, true)
+          table.compaction(partitions, true, fileNumLimit = Some(100))
         }
       } catch {
         case e: Exception => {

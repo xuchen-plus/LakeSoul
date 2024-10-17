@@ -310,6 +310,10 @@ class LakeSoulTable(df: => Dataset[Row], snapshotManagement: SnapshotManagement)
     compaction("", true, Map.empty[String, Any], "", "", false, None)
   }
 
+  def compaction(fileNumLimit: Option[Int]): Unit = {
+    compaction("", true, Map.empty[String, Any], "", "", false, fileNumLimit)
+  }
+
   def compaction(cleanOldCompaction: Boolean): Unit = {
     compaction("", true, Map.empty[String, Any], "", "", cleanOldCompaction, None)
   }
@@ -320,6 +324,10 @@ class LakeSoulTable(df: => Dataset[Row], snapshotManagement: SnapshotManagement)
 
   def compaction(condition: String, cleanOldCompaction: Boolean): Unit = {
     compaction(condition, true, Map.empty[String, Any], "", "", cleanOldCompaction, None)
+  }
+
+  def compaction(condition: String, cleanOldCompaction: Boolean, fileNumLimit: Option[Int]): Unit = {
+    compaction(condition, true, Map.empty[String, Any], "", "", cleanOldCompaction, fileNumLimit)
   }
 
   def compaction(mergeOperatorInfo: Map[String, Any]): Unit = {
@@ -364,7 +372,7 @@ class LakeSoulTable(df: => Dataset[Row], snapshotManagement: SnapshotManagement)
                  hiveTableName: String,
                  hivePartitionName: String,
                  cleanOldCompaction: Boolean,
-                 maxSnapshotsPerGroup: Option[Int]): Unit = {
+                 fileNumLimit: Option[Int]): Unit = {
     val newMergeOpInfo = mergeOperatorInfo.map(m => {
       val key =
         if (!m._1.startsWith(LakeSoulUtils.MERGE_OP_COL)) {
@@ -380,7 +388,7 @@ class LakeSoulTable(df: => Dataset[Row], snapshotManagement: SnapshotManagement)
       (key, value)
     })
 
-    executeCompaction(df, snapshotManagement, condition, force, newMergeOpInfo, hiveTableName, hivePartitionName, cleanOldCompaction, maxSnapshotsPerGroup)
+    executeCompaction(df, snapshotManagement, condition, force, newMergeOpInfo, hiveTableName, hivePartitionName, cleanOldCompaction, fileNumLimit)
   }
 
   def setCompactionTtl(days: Int): LakeSoulTable = {
