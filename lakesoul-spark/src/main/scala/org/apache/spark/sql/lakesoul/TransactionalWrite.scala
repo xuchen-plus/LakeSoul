@@ -114,7 +114,7 @@ trait TransactionalWrite {
     val data = Dataset.ofRows(spark, (if (!isCompaction && tableInfo.hash_partition_columns.nonEmpty) {
       oriData.repartition(tableInfo.bucket_num, tableInfo.hash_partition_columns.map(col): _*)
     } else {
-      if (isCompaction && newBucketNum.exists(tableInfo.bucket_num.equals) && tableInfo.hash_partition_columns.nonEmpty) {
+      if (isCompaction && bucketNumChanged && tableInfo.hash_partition_columns.nonEmpty) {
         oriData.repartition(newBucketNum.get, tableInfo.hash_partition_columns.map(col): _*)
       } else {
         oriData
