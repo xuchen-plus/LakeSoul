@@ -15,7 +15,7 @@ import org.apache.spark.sql.lakesoul.SnapshotManagement
 import org.apache.spark.sql.lakesoul.catalog.LakeSoulCatalog
 import org.apache.spark.sql.lakesoul.sources.LakeSoulSQLConf
 import org.apache.spark.sql.lakesoul.test.{LakeSoulSQLCommandTest, LakeSoulTestSparkSession, MergeOpInt}
-import org.apache.spark.sql.lakesoul.utils.SparkUtil
+import org.apache.spark.sql.lakesoul.utils.{SparkUtil, TableInfo}
 import org.apache.spark.sql.test.{SharedSparkSession, TestSparkSession}
 import org.apache.spark.sql.{AnalysisException, QueryTest, Row, SparkSession}
 import org.apache.spark.util.Utils
@@ -639,10 +639,13 @@ class CompactionSuite extends QueryTest
         lakeSoulTable.upsert(appendDf)
       }
       assert(getFileBucketSet(tablePath).size == hashBucketNum)
+      assert(getTableInfo(tablePath).bucket_num == hashBucketNum)
 
       lakeSoulTable.compaction(newBucketNum = Some(newHashBucketNum))
 
       assert(getFileBucketSet(tablePath).size == newHashBucketNum)
+      assert(getTableInfo(tablePath).bucket_num == newHashBucketNum)
+
       val compactedData = lakeSoulTable.toDF.orderBy("id", "date").collect()
       println(compactedData.mkString("Array(", ", ", ")"))
       assert(compactedData.length == 105, s"The compressed data should have ${105} rows, but it actually has ${compactedData.length} rows")
@@ -657,6 +660,12 @@ class CompactionSuite extends QueryTest
     val files = DataOperation.getTableDataInfo(partitionList)
     println(files.mkString("Array(", ", ", ")"))
     files.groupBy(_.file_bucket_id).keys.toSet
+  }
+
+  // Auxiliary method: Get the bucket number of table
+  def getTableInfo(tablePath: String): TableInfo = {
+    val sm = SnapshotManagement(SparkUtil.makeQualifiedTablePath(new Path(tablePath)).toString)
+    sm.getTableInfoOnly
   }
 
 }
