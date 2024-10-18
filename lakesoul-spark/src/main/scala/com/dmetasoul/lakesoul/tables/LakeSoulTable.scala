@@ -306,14 +306,6 @@ class LakeSoulTable(df: => Dataset[Row], snapshotManagement: SnapshotManagement)
   }
 
   //by default, force perform compaction on whole table
-  def compaction(): Unit = {
-    compaction("", true, Map.empty[String, Any], "", "", false, None, None)
-  }
-
-  def compaction(condition: String): Unit = {
-    compaction(condition = condition, true)
-  }
-
   def compaction(condition: String = "",
                  force: Boolean = true,
                  mergeOperatorInfo: Map[String, Any] = Map.empty,
