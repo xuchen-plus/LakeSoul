@@ -158,14 +158,17 @@ trait TransactionalWrite {
       if (cdcCol.nonEmpty) {
         options.put("isCDC", "true")
         val cdcColName = cdcCol.get
-        data.withColumn(cdcColName,
-          when(col(cdcColName) === "update", "insert")
-            .otherwise(col(cdcColName))
-        )
         if (!writeOptions.isDefined || writeOptions.get.options.getOrElse("fileNumLimit", "false").equals("false")) {
-          data.where(s"$cdcColName != 'delete'")
+          data.withColumn(cdcColName,
+            when(col(cdcColName) === "update", "insert")
+              .otherwise(col(cdcColName))
+          ).where(s"$cdcColName != 'delete'")
+        } else {
+          data.withColumn(cdcColName,
+            when(col(cdcColName) === "update", "insert")
+              .otherwise(col(cdcColName))
+          )
         }
-        data
       } else {
         data
       }
