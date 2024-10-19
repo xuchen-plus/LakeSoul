@@ -22,6 +22,7 @@ object CompactionTask {
   val dateFormat: SimpleDateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss")
   val THREADPOOL_SIZE_PARAMETER = "threadpool.size"
   val DATABASE_PARAMETER = "database"
+  val CLEAN_OLD_COMPACTION = "clean_old_compaction"
   val FILE_NUM_LIMIT_PARAMETER = "file_num_limit"
 
   val NOTIFY_CHANNEL_NAME = "lakesoul_compaction_notify"
@@ -29,6 +30,7 @@ object CompactionTask {
 
   var threadPoolSize = 8
   var database = ""
+  var cleanOldCompaction: Option[Boolean] = Some(false)
   var fileNumLimit: Option[Int] = None
 
   def main(args: Array[String]): Unit = {
@@ -36,6 +38,9 @@ object CompactionTask {
     val parameter = ParametersTool.fromArgs(args)
     threadPoolSize = parameter.getInt(THREADPOOL_SIZE_PARAMETER, 8)
     database = parameter.get(DATABASE_PARAMETER, "")
+    if (parameter.has(CLEAN_OLD_COMPACTION)) {
+      cleanOldCompaction = Some(parameter.getBoolean(CLEAN_OLD_COMPACTION))
+    }
     if (parameter.has(FILE_NUM_LIMIT_PARAMETER)) {
       fileNumLimit = Some(parameter.getInt(FILE_NUM_LIMIT_PARAMETER))
     }
@@ -59,8 +64,8 @@ object CompactionTask {
   }
 
   class Listener extends Thread {
-    private val conn = DBConnector.getConn
-    private val pgconn = conn.unwrap(classOf[PGConnection])
+    private var conn = DBConnector.getConn
+    private var pgconn = conn.unwrap(classOf[PGConnection])
 
     val threadPool: ExecutorService = Executors.newFixedThreadPool(threadPoolSize)
 
@@ -71,25 +76,40 @@ object CompactionTask {
 
       val jsonParser = new JsonParser()
       while (true) {
-        val notifications = pgconn.getNotifications
-        if (notifications.nonEmpty) {
-          notifications.foreach(notification => {
-            val notificationParameter = notification.getParameter
-            if (threadMap.get(notificationParameter) != 1) {
-              threadMap.put(notificationParameter, 1)
-              val jsonObj = jsonParser.parse(notificationParameter).asInstanceOf[JsonObject]
-              println("========== " + dateFormat.format(new Date()) + " start processing notification: " + jsonObj + " ==========")
-              val tablePath = jsonObj.get("table_path").getAsString
-              val partitionDesc = jsonObj.get("table_partition_desc").getAsString
-              val tableNamespace = jsonObj.get("table_namespace").getAsString
-              if (tableNamespace.equals(database) || database.equals("")) {
-                val rsPartitionDesc = if (partitionDesc.equals(MetaUtils.DEFAULT_RANGE_PARTITION_VALUE)) "" else partitionDesc
-                threadPool.execute(new CompactionTableInfo(tablePath, rsPartitionDesc, notificationParameter))
+        try {
+          if (!conn.isValid(5000)) {
+            conn.close()
+            conn = DBConnector.getConn
+            pgconn = conn.unwrap(classOf[PGConnection])
+            val stmt = conn.createStatement
+            stmt.execute("LISTEN " + NOTIFY_CHANNEL_NAME)
+            stmt.close()
+          }
+          val notifications = pgconn.getNotifications
+          if (notifications.nonEmpty) {
+            notifications.foreach(notification => {
+              val notificationParameter = notification.getParameter
+              if (threadMap.get(notificationParameter) != 1) {
+                threadMap.put(notificationParameter, 1)
+                val jsonObj = jsonParser.parse(notificationParameter).asInstanceOf[JsonObject]
+                println("========== " + dateFormat.format(new Date()) + " start processing notification: " + jsonObj + " ==========")
+                val tablePath = jsonObj.get("table_path").getAsString
+                val partitionDesc = jsonObj.get("table_partition_desc").getAsString
+                val tableNamespace = jsonObj.get("table_namespace").getAsString
+                if (tableNamespace.equals(database) || database.equals("")) {
+                  val rsPartitionDesc = if (partitionDesc.equals(MetaUtils.DEFAULT_RANGE_PARTITION_VALUE)) "" else partitionDesc
+                  threadPool.execute(new CompactionTableInfo(tablePath, rsPartitionDesc, notificationParameter))
+                }
               }
-            }
-          })
+            })
+          }
+          Thread.sleep(10000)
+        } catch {
+          case e: Exception => {
+            println("** " + dateFormat.format(new Date()) + " find exception in while codes **")
+            throw e
+          }
         }
-        Thread.sleep(10000)
       }
     }
   }
@@ -101,14 +121,14 @@ object CompactionTask {
         println("------ " + threadName + " is compressing table path is: " + path + " ------")
         val table = LakeSoulTable.forPath(path)
         if (partitionDesc == "") {
-          table.compaction(fileNumLimit = fileNumLimit)
+          table.compaction(cleanOldCompaction = cleanOldCompaction.get, fileNumLimit = fileNumLimit)
         } else {
           val partitions = partitionDesc.split(",").map(
             partition => {
               partition.replace("=", "='") + "'"
             }
           ).mkString(" and ")
-          table.compaction(partitions, cleanOldCompaction = true, fileNumLimit = fileNumLimit)
+          table.compaction(partitions, cleanOldCompaction = cleanOldCompaction.get, fileNumLimit = fileNumLimit)
         }
       } catch {
         case e: Exception => {
