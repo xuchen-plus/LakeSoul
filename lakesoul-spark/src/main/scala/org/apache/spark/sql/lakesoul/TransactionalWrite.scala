@@ -161,7 +161,11 @@ trait TransactionalWrite {
         data.withColumn(cdcColName,
           when(col(cdcColName) === "update", "insert")
             .otherwise(col(cdcColName))
-        ).where(s"$cdcColName != 'delete'")
+        )
+        if (!writeOptions.isDefined || writeOptions.get.options.getOrElse("fileNumLimit", "false").equals("false")) {
+          data.where(s"$cdcColName != 'delete'")
+        }
+        data
       } else {
         data
       }
