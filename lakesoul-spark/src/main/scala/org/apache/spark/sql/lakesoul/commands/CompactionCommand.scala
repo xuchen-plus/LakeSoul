@@ -109,6 +109,9 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
     val map = mutable.HashMap[String, String]()
     map.put("isCompaction", "true")
     map.put("compactPath", compactPath)
+    if (fileNumLimit.isDefined) {
+      map.put("fileNumLimit", "true")
+    }
     if (readPartitionInfo.nonEmpty) {
       map.put("partValue", readPartitionInfo.head.range_value)
     }
