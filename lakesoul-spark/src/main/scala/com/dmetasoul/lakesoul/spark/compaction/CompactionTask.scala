@@ -24,6 +24,7 @@ object CompactionTask {
   val DATABASE_PARAMETER = "database"
   val CLEAN_OLD_COMPACTION = "clean_old_compaction"
   val FILE_NUM_LIMIT_PARAMETER = "file_num_limit"
+  val FILE_SIZE_LIMIT_PARAMETER = "file_size_limit"
 
   val NOTIFY_CHANNEL_NAME = "lakesoul_compaction_notify"
   val threadMap: java.util.Map[String, Integer] = new ConcurrentHashMap
@@ -32,6 +33,7 @@ object CompactionTask {
   var database = ""
   var cleanOldCompaction: Option[Boolean] = Some(false)
   var fileNumLimit: Option[Int] = None
+  var fileSizeLimit: Option[String] = None
 
   def main(args: Array[String]): Unit = {
 
@@ -43,6 +45,9 @@ object CompactionTask {
     }
     if (parameter.has(FILE_NUM_LIMIT_PARAMETER)) {
       fileNumLimit = Some(parameter.getInt(FILE_NUM_LIMIT_PARAMETER))
+    }
+    if (parameter.has(FILE_SIZE_LIMIT_PARAMETER)) {
+      fileSizeLimit = Some(parameter.get(FILE_SIZE_LIMIT_PARAMETER))
     }
 
     val builder = SparkSession.builder()
@@ -121,14 +126,14 @@ object CompactionTask {
         println("------ " + threadName + " is compressing table path is: " + path + " ------")
         val table = LakeSoulTable.forPath(path)
         if (partitionDesc == "") {
-          table.compaction(cleanOldCompaction = cleanOldCompaction.get, fileNumLimit = fileNumLimit)
+          table.compaction(cleanOldCompaction = cleanOldCompaction.get, fileNumLimit = fileNumLimit, fileSizeLimit = fileSizeLimit, force = fileSizeLimit.isEmpty)
         } else {
           val partitions = partitionDesc.split(",").map(
             partition => {
               partition.replace("=", "='") + "'"
             }
           ).mkString(" and ")
-          table.compaction(partitions, cleanOldCompaction = cleanOldCompaction.get, fileNumLimit = fileNumLimit)
+          table.compaction(partitions, cleanOldCompaction = cleanOldCompaction.get, fileNumLimit = fileNumLimit, fileSizeLimit = fileSizeLimit, force = fileSizeLimit.isEmpty)
         }
       } catch {
         case e: Exception => {

@@ -84,6 +84,10 @@ trait TransactionalWrite {
     rangePartitionColumns
   }
 
+  def addRenameFiles(files: Seq[(Path, Path)]): Unit = {
+    files.foreach(srcAndDst => addRenameFile(srcAndDst._1, srcAndDst._2))
+  }
+
   def writeFiles(data: Dataset[_]): Seq[DataFileInfo] = writeFiles(data, None, isCompaction = false)._1
 
   def writeFiles(data: Dataset[_], writeOptions: Option[LakeSoulOptions]): Seq[DataFileInfo] =
@@ -158,7 +162,7 @@ trait TransactionalWrite {
       if (cdcCol.nonEmpty) {
         options.put("isCDC", "true")
         val cdcColName = cdcCol.get
-        if (!writeOptions.isDefined || writeOptions.get.options.getOrElse("fileNumLimit", "false").equals("false")) {
+        if (writeOptions.forall(_.options.getOrElse("fullCompact", "true").equals("true"))) {
           data.withColumn(cdcColName,
             when(col(cdcColName) === "update", "insert")
               .otherwise(col(cdcColName))
