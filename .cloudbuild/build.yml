@@ -8,7 +8,7 @@ steps:
       inputs:
         scm: "codehub"
         url: "git@codehub.devcloud.cn-east-3.huaweicloud.com:42b369588d84469d95d7b738fc58da8e/LakeSoul/for-nanhang.git"
-        # branch: "merge_main"
+        branch: "merge_main"
         lfs: false
         submodule: false
   BUILD:
