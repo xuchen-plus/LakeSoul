@@ -26,7 +26,10 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.KafkaSourceBuilder;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.lakesoul.entry.sql.flink.LakeSoulInAndOutputJobListener;
+import org.apache.flink.lakesoul.entry.sql.utils.FileUtil;
 import org.apache.flink.lakesoul.sink.LakeSoulMultiTableSinkStreamBuilder;
+import org.apache.flink.lakesoul.tool.JobOptions;
 import org.apache.flink.lakesoul.tool.LakeSoulSinkOptions;
 import org.apache.flink.lakesoul.types.*;
 import org.apache.flink.streaming.api.CheckpointingMode;
@@ -43,6 +46,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
@@ -53,11 +57,10 @@ import static org.apache.flink.lakesoul.tool.LakeSoulKafkaSinkOptions.*;
 public class KafkaCdc {
 
     /**
-     * @param args
-     * --bootstrap_servers localhost:9092 --topic t_test --auto_offset_reset earliest --group_id test
-     * --source.parallelism 4 --sink.parallelism 4 --job.checkpoint_interval 5000
-     * --warehouse_path /tmp/lakesoul/kafka
-     * --flink.checkpoint /tmp/lakesoul/chk
+     * @param args --bootstrap_servers localhost:9092 --topic t_test --auto_offset_reset earliest --group_id test
+     *             --source.parallelism 4 --sink.parallelism 4 --job.checkpoint_interval 5000
+     *             --warehouse_path /tmp/lakesoul/kafka
+     *             --flink.checkpoint /tmp/lakesoul/chk
      * @throws Exception
      */
     public static void main(String[] args) throws Exception {
@@ -164,7 +167,30 @@ public class KafkaCdc {
         conf.set(LakeSoulSinkOptions.LOGICALLY_DROP_COLUM, logicallyDropColumn);
         conf.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
 
-        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
+        String lineageUrl = System.getenv("LINEAGE_URL");
+        LakeSoulInAndOutputJobListener listener = null;
+        StreamExecutionEnvironment env;
+        String appName = null;
+        String namespace = null;
+        if (lineageUrl != null) {
+            conf.set(JobOptions.transportTypeOption, "http");
+            conf.set(JobOptions.urlOption, lineageUrl);
+            conf.set(JobOptions.execAttach, false);
+            conf.set(lineageOption, true);
+            env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
+            appName = FileUtil.getSubNameFromBatch(env.getConfiguration().get(JobOptions.KUBE_CLUSTER_ID));
+            namespace = System.getenv("LAKESOUL_CURRENT_DOMAIN");
+            if (namespace == null) {
+                namespace = "public";
+            }
+            listener = new LakeSoulInAndOutputJobListener(lineageUrl);
+            listener.jobName(appName, namespace);
+            listener.inputFacets("kafka." + kafkaTopic, "kafka-public", null, null);
+            env.registerJobListener(listener);
+        } else {
+            env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
+        }
+
         env.getConfig().registerTypeWithKryoSerializer(BinarySourceRecord.class, BinarySourceRecordSerializer.class);
         ParameterTool pt = ParameterTool.fromMap(conf.toMap());
         env.getConfig().setGlobalJobParameters(pt);
@@ -207,7 +233,16 @@ public class KafkaCdc {
 
         LakeSoulMultiTableSinkStreamBuilder.Context context = new LakeSoulMultiTableSinkStreamBuilder.Context();
         context.env = env;
-        context.conf = (Configuration) env.getConfiguration();
+        if (lineageUrl != null) {
+            Map<String, String> confs = ((Configuration) env.getConfiguration()).toMap();
+            confs.put(linageJobName.key(), appName);
+            confs.put(linageJobNamespace.key(), namespace);
+            confs.put(lineageJobUUID.key(), listener.getRunId());
+            confs.put(lineageOption.key(), "true");
+            context.conf = Configuration.fromMap(confs);
+        } else {
+            context.conf = (Configuration) env.getConfiguration();
+        }
         LakeSoulMultiTableSinkStreamBuilder builder = new LakeSoulMultiTableSinkStreamBuilder(kafkaSource, context, lakeSoulRecordConvert);
         DataStreamSource<BinarySourceRecord> source = builder.buildMultiTableSource("Kafka Source");
 

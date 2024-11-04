@@ -7,6 +7,7 @@ package org.apache.flink.lakesoul.entry;
 import com.dmetasoul.lakesoul.meta.DBManager;
 import com.dmetasoul.lakesoul.meta.DBUtil;
 import com.dmetasoul.lakesoul.meta.entity.TableInfo;
+import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
@@ -23,7 +24,10 @@ import org.apache.flink.formats.avro.RowDataToAvroConverters;
 import org.apache.flink.formats.avro.RowDataToAvroConverters.RowDataToAvroConverter;
 import org.apache.flink.formats.avro.registry.confluent.ConfluentRegistryAvroSerializationSchema;
 import org.apache.flink.formats.avro.typeutils.AvroSchemaConverter;
+import org.apache.flink.lakesoul.entry.sql.flink.LakeSoulInAndOutputJobListener;
+import org.apache.flink.lakesoul.entry.sql.utils.FileUtil;
 import org.apache.flink.lakesoul.source.arrow.LakeSoulArrowSource;
+import org.apache.flink.lakesoul.tool.JobOptions;
 import org.apache.flink.lakesoul.tool.LakeSoulKeyGen;
 import org.apache.flink.lakesoul.tool.LakeSoulSinkOptions;
 import org.apache.flink.lakesoul.types.LakSoulKafkaPartitioner;
@@ -137,7 +141,42 @@ public class LakeSoulKafkaAvroSink {
         conf.set(LakeSoulSinkOptions.BUCKET_PARALLELISM, sinkParallelism);
         conf.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
 
-        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
+        String lineageUrl = System.getenv("LINEAGE_URL");
+        LakeSoulInAndOutputJobListener listener;
+        StreamExecutionEnvironment env;
+        if (lineageUrl != null) {
+            conf.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
+            conf.set(JobOptions.transportTypeOption, "http");
+            conf.set(JobOptions.urlOption, lineageUrl);
+            conf.set(JobOptions.execAttach, false);
+            conf.set(lineageOption, true);
+            env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
+            String appName = FileUtil.getSubNameFromBatch(env.getConfiguration().get(JobOptions.KUBE_CLUSTER_ID));
+            String namespace = System.getenv("LAKESOUL_CURRENT_DOMAIN");
+            if (namespace == null) {
+                namespace = "public";
+            }
+            listener = new LakeSoulInAndOutputJobListener(lineageUrl);
+            listener.jobName(appName, namespace);
+            listener.outputFacets("Kafka." + kafkaTopic, "kafka-public", null, null);
+            DBManager lakesoulDBManager = new DBManager();
+            TableInfo tableInfo = lakesoulDBManager.getTableInfoByNameAndNamespace(lakeSoulTableName, lakeSoulDBName);
+            String tableSchema = tableInfo.getTableSchema();
+            Schema schema = Schema.fromJSON(tableSchema);
+            int size = schema.getFields().size();
+            String[] colNames = new String[size];
+            String[] colTypes = new String[size];
+            for (int i = 0; i < size; i++) {
+                Field field = schema.getFields().get(i);
+                colNames[i] = field.getName();
+                colTypes[i] = field.getType().toString();
+            }
+            listener.inputFacets("lakesoul." + lakeSoulDBName + "." + lakeSoulTableName, tableInfo.getDomain(), colNames, colTypes);
+            env.registerJobListener(listener);
+        } else {
+            env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
+        }
+
         ParameterTool pt = ParameterTool.fromMap(conf.toMap());
         env.getConfig().setGlobalJobParameters(pt);
         env.enableCheckpointing(checkpointInterval);
@@ -183,7 +222,7 @@ public class LakeSoulKafkaAvroSink {
                 .build();
 
 
-        Tuple4<ConfluentRegistryAvroSerializationSchema, RowDataToAvroConverter, RowType, RowData.FieldGetter[]>  keyInfo = getKeyInfo(lakeSoulDBName,
+        Tuple4<ConfluentRegistryAvroSerializationSchema, RowDataToAvroConverter, RowType, RowData.FieldGetter[]> keyInfo = getKeyInfo(lakeSoulDBName,
                 lakeSoulTableName, kafkaTopic, schemaRegistryUrl, props);
         ConfluentRegistryAvroSerializationSchema keySerialization;
         RowDataToAvroConverter keyRowDataToAvroConverter;
@@ -191,7 +230,7 @@ public class LakeSoulKafkaAvroSink {
         FieldGetter[] keyFieldGetters;
         if (keyInfo != null) {
             keySerialization = keyInfo.f0;
-            keyRowDataToAvroConverter = keyInfo.f1 ;
+            keyRowDataToAvroConverter = keyInfo.f1;
             keyRowType = keyInfo.f2;
             keyFieldGetters = keyInfo.f3;
         } else {
@@ -221,7 +260,7 @@ public class LakeSoulKafkaAvroSink {
                                 RowData kafkaRowData = toKafkaAvroRawData(rowData, rowType, String.format("%s.%s", lakeSoulDBName, lakeSoulTableName));
 
                                 byte[] keyBytes = null;
-                                if (keySerialization != null ) {
+                                if (keySerialization != null) {
                                     GenericRecord keyGenericRecord = (GenericRecord) keyRowDataToAvroConverter.convert(
                                             AvroSchemaConverter.convertToSchema(keyRowType, false),
                                             createProjectedRow(rowData, RowKind.INSERT, keyFieldGetters));
@@ -269,7 +308,8 @@ public class LakeSoulKafkaAvroSink {
 
         final RowData.FieldGetter[] keyFieldGetters;
         RowType keyRowType;
-        int[] keyIndex;;
+        int[] keyIndex;
+        ;
 
         if (primaryKeys.size() > 0) {
             try {
