@@ -90,7 +90,7 @@ public class ExecuteSql {
 
         // try get k8s cluster name
         String k8sClusterID = conf.getString("kubernetes.cluster-id", "");
-        env.execute(k8sClusterID.isEmpty() ? null : k8sClusterID + "-job");
+        env.execute(k8sClusterID.isEmpty() ? null : k8sClusterID);
     }
 
     public static List<String> parseStatements(String script) {
