@@ -97,6 +97,9 @@ public class ExecuteSql {
             System.out.println("There's no INSERT INTO statement, the program will terminate");
         }
 
+        // try get k8s cluster name
+        String k8sClusterID = conf.getString("kubernetes.cluster-id", "");
+        env.execute(k8sClusterID.isEmpty() ? null : k8sClusterID);
     }
 
     public static List<String> parseStatements(String script) {
