@@ -92,10 +92,11 @@ public class ExecuteSql {
 
             // try get k8s cluster name
             String k8sClusterID = conf.getString("kubernetes.cluster-id", "");
-            env.execute(k8sClusterID.isEmpty() ? null : k8sClusterID + "-job");
+            env.execute(k8sClusterID.isEmpty() ? null : k8sClusterID);
         } else {
             System.out.println("There's no INSERT INTO statement, the program will terminate");
         }
+
     }
 
     public static List<String> parseStatements(String script) {
