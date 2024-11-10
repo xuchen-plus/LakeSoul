@@ -4,7 +4,6 @@
 package com.dmetasoul.lakesoul.meta.jnr;
 
 import com.alibaba.fastjson.JSON;
-import com.dmetasoul.lakesoul.meta.DBConnector;
 import com.dmetasoul.lakesoul.meta.DBUtil;
 import com.dmetasoul.lakesoul.meta.DataBaseProperty;
 import com.dmetasoul.lakesoul.meta.entity.JniWrapper;
@@ -43,9 +42,6 @@ public class NativeMetadataJavaClient implements AutoCloseable {
 //    private Pointer mutableBuffer = null;
 
     private Pointer tokioRuntime = null;
-
-    private Pointer preparedStatement = null;
-
 
     protected final LibLakeSoulMetaData libLakeSoulMetaData;
 
@@ -201,7 +197,7 @@ public class NativeMetadataJavaClient implements AutoCloseable {
         tokioRuntime = libLakeSoulMetaData.create_tokio_runtime();
 
         String config = String.format(
-                "host=%s port=%s dbname=%s user=%s password=%s",
+                "host=%s port=%s dbname=%s user=%s password=%s connect_timeout=10 ",
                 dataBaseProperty.getHost(),
                 dataBaseProperty.getPort(),
                 dataBaseProperty.getDbName(),
@@ -220,7 +216,6 @@ public class NativeMetadataJavaClient implements AutoCloseable {
                 config,
                 tokioRuntime
         );
-        preparedStatement = libLakeSoulMetaData.create_prepared_statement();
         try {
             future.get(timeout, TimeUnit.MILLISECONDS);
         } catch (InterruptedException | ExecutionException e) {
@@ -249,7 +244,6 @@ public class NativeMetadataJavaClient implements AutoCloseable {
                             }, getIntegerCallbackObjectReferenceManager()),
                             tokioRuntime,
                             tokioPostgresClient,
-                            preparedStatement,
                             queryType,
                             String.join(PARAM_DELIM, params)
                     );
@@ -363,7 +357,6 @@ public class NativeMetadataJavaClient implements AutoCloseable {
                             }, getIntegerCallbackObjectReferenceManager()),
                             tokioRuntime,
                             tokioPostgresClient,
-                            preparedStatement,
                             insertType,
                             buffer.address(),
                             bytes.length
@@ -411,7 +404,6 @@ public class NativeMetadataJavaClient implements AutoCloseable {
                             }, getIntegerCallbackObjectReferenceManager()),
                             tokioRuntime,
                             tokioPostgresClient,
-                            preparedStatement,
                             updateType,
                             String.join(PARAM_DELIM, params)
                     );
@@ -458,7 +450,6 @@ public class NativeMetadataJavaClient implements AutoCloseable {
                             }, getStringCallbackObjectReferenceManager()),
                             tokioRuntime,
                             tokioPostgresClient,
-                            preparedStatement,
                             queryScalarType,
                             String.join(PARAM_DELIM, params)
                     );
@@ -552,10 +543,6 @@ public class NativeMetadataJavaClient implements AutoCloseable {
             libLakeSoulMetaData.free_tokio_postgres_client(tokioPostgresClient);
             tokioPostgresClient = null;
         }
-        if (preparedStatement != null) {
-            libLakeSoulMetaData.free_prepared_statement(preparedStatement);
-            preparedStatement = null;
-        }
     }
 
     public static void closeAll() {
@@ -589,7 +576,6 @@ public class NativeMetadataJavaClient implements AutoCloseable {
                             future.complete(result);
                         }, getbooleanCallbackObjectReferenceManager()),
                         tokioPostgresClient,
-                        preparedStatement,
                         tokioRuntime,
                         tableName,
                         namespace);
