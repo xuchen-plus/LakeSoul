@@ -127,6 +127,7 @@ public class NativeParquetWriter implements InProgressFileWriter<RowData, String
             // so we have to release ownership in java
             this.batch.clear();
             this.arrowWriter.reset();
+            LOG.info("Write batch to native with rows={}", this.rowsInBatch);
             this.rowsInBatch = 0;
         }
     }
@@ -251,7 +252,8 @@ public class NativeParquetWriter implements InProgressFileWriter<RowData, String
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
-        LOG.info("CloseForCommitWithRecoverableMap done, costTime={}ms, recoverableMap={}", System.currentTimeMillis() - timer, recoverableMap);
+        LOG.info("CloseForCommitWithRecoverableMap done, costTime={}ms, recoverableMap={}, totalRows={}",
+                System.currentTimeMillis() - timer, recoverableMap, totalRows);
         return recoverableMap;
     }
 

@@ -243,7 +243,7 @@ public class LakeSoulWriterBucket {
         final Path partFilePath = assembleNewPartPath();
 
         LOG.info(
-                "Opening new part file \"{}\" for bucket id={}.",
+                "Roll and Opening new part file \"{}\" for bucket id={}.",
                 partFilePath.getName(),
                 getBucketId());
 

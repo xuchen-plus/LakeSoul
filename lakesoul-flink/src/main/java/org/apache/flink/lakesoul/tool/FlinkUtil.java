@@ -496,6 +496,7 @@ public class FlinkUtil {
             if (value != null) {
                 int lastDot = option.key().lastIndexOf('.');
                 String key = lastDot == -1 ? option.key() : option.key().substring(lastDot + 1);
+                LOG.info("set io option {}={}", key, value);
                 io.setOption(key, value);
             }
         }
