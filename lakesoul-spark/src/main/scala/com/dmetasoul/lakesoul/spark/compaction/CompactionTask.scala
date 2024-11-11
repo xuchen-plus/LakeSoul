@@ -34,6 +34,7 @@ object CompactionTask {
   var cleanOldCompaction: Option[Boolean] = Some(false)
   var fileNumLimit: Option[Int] = None
   var fileSizeLimit: Option[String] = None
+  var tablePathArray = Array[String]()
 
   def main(args: Array[String]): Unit = {
 
@@ -59,6 +60,22 @@ object CompactionTask {
 
     val spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
+
+    tablePathArray = Array(
+      "hdfs://simple-hdfs/lakesoul-warehouse/czods/s_ALOYSYS_LMS_CDM_CUSTOMER_ACTIVITY",
+      "hdfs://simple-hdfs/lakesoul-warehouse/czods/s_ALOYSYS_LMS_CDM_EXT_CUST_CERTIFICATE",
+      "hdfs://simple-hdfs/lakesoul-warehouse/czods/s_ALOYSYS_LMS_EPP_AIR_EVENT",
+      "hdfs://simple-hdfs/lakesoul-warehouse/czods/s_ALOYSYS_LMS_EPP_NON_AIR_EVENT",
+      "hdfs://simple-hdfs/lakesoul-warehouse/czods/s_ALOYSYS_LMS_LSD_ALIAS",
+      "hdfs://simple-hdfs/lakesoul-warehouse/czods/s_ALOYSYS_LMS_LSD_EVENT",
+      "hdfs://simple-hdfs/lakesoul-warehouse/czods/s_czods_s_cbd_mem_loc",
+      "hdfs://simple-hdfs/lakesoul-warehouse/czods/s_czods_s_cbd_oneid_certificate",
+      "hdfs://simple-hdfs/lakesoul-warehouse/czods/s_czods_s_cbd_oneid_device",
+      "hdfs://simple-hdfs/lakesoul-warehouse/czods/s_czods_s_cbd_oneid_phone",
+      "hdfs://simple-hdfs/lakesoul-warehouse/czods/s_czods_s_cbd_oneid_wechat",
+      "hdfs://simple-hdfs/lakesoul-warehouse/czods/s_PFR_PASSENGER_FLOWN_RECORD",
+      "hdfs://simple-hdfs/lakesoul-warehouse/czods/s_BI_HIST_AIR_EVENT"
+    )
 
     new Listener().start()
 
@@ -99,11 +116,13 @@ object CompactionTask {
                 val jsonObj = jsonParser.parse(notificationParameter).asInstanceOf[JsonObject]
                 println("========== " + dateFormat.format(new Date()) + " start processing notification: " + jsonObj + " ==========")
                 val tablePath = jsonObj.get("table_path").getAsString
-                val partitionDesc = jsonObj.get("table_partition_desc").getAsString
-                val tableNamespace = jsonObj.get("table_namespace").getAsString
-                if (tableNamespace.equals(database) || database.equals("")) {
-                  val rsPartitionDesc = if (partitionDesc.equals(MetaUtils.DEFAULT_RANGE_PARTITION_VALUE)) "" else partitionDesc
-                  threadPool.execute(new CompactionTableInfo(tablePath, rsPartitionDesc, notificationParameter))
+                if (!tablePathArray.contains(tablePath) && !tablePath.contains("10.64.219.26")) {
+                  val partitionDesc = jsonObj.get("table_partition_desc").getAsString
+                  val tableNamespace = jsonObj.get("table_namespace").getAsString
+                  if (tableNamespace.equals(database) || database.equals("")) {
+                    val rsPartitionDesc = if (partitionDesc.equals(MetaUtils.DEFAULT_RANGE_PARTITION_VALUE)) "" else partitionDesc
+                    threadPool.execute(new CompactionTableInfo(tablePath, rsPartitionDesc, notificationParameter))
+                  }
                 }
               }
             })

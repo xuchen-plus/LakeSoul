@@ -37,18 +37,27 @@ object CleanExpiredData {
   def cleanAllPartitionExpiredData(spark: SparkSession): Unit = {
     val sql =
       """
-        |SELECT DISTINCT
-        |   p.table_id,
-        |   partition_desc,
-        |   (properties::json)->>'partition.ttl' AS partition_ttl,
-        |   (properties::json)->>'compaction.ttl' AS compaction_ttl,
-        |   (properties::json)->>'only_save_once_compaction' AS only_save_once_compaction
+        |SELECT
+        |    t.table_id,
+        |    p.partition_desc,
+        |    (properties::json)->>'partition.ttl' AS partition_ttl,
+        |    (properties::json)->>'compaction.ttl' AS compaction_ttl,
+        |    (properties::json)->>'only_save_once_compaction' AS only_save_once_compaction
         |FROM
-        |   partition_info p
-        |JOIN
         |    table_info t
+        |JOIN (
+        |    SELECT
+        |        table_id,
+        |        partition_desc
+        |    FROM
+        |        partition_info
+        |    GROUP BY
+        |        table_id,
+        |        partition_desc
+        |) p
         |ON
-        |    p.table_id=t.table_id;
+        |    t.table_id = p.table_id
+        |WHERE t.table_path NOT LIKE '%10.64.219.26%';
         |""".stripMargin
     val partitionRows = sqlToDataframe(sql, spark).rdd.collect()
     partitionRows.foreach(p => {
