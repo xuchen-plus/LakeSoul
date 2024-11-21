@@ -6,7 +6,6 @@ package com.dmetasoul.lakesoul.meta
 
 import com.dmetasoul.lakesoul.meta.entity.{CommitOp, DataCommitInfo, PartitionInfo}
 
-import java.net.URI
 import java.util
 import java.util.{Objects, UUID}
 import scala.collection.JavaConverters._

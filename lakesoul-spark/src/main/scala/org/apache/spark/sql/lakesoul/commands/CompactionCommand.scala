@@ -9,6 +9,7 @@ import com.dmetasoul.lakesoul.meta.DBConfig.TableInfoProperty
 import com.dmetasoul.lakesoul.meta.entity.{DataCommitInfo, DataFileOp, FileOp}
 import com.dmetasoul.lakesoul.meta.{DBUtil, DataFileInfo, PartitionInfoScala, SparkMetaVersion}
 import com.dmetasoul.lakesoul.spark.clean.CleanOldCompaction.{cleanOldCommitOpDiskData, splitCompactFilePath}
+import org.apache.hadoop.fs.permission.{FsAction, FsPermission}
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.PredicateHelper
@@ -151,6 +152,10 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
     logInfo(s"write CompactData with Option=$map")
 
     val (newFiles, path) = tc.writeFiles(compactDF, Some(new LakeSoulOptions(map.toMap, spark.sessionState.conf)), isCompaction = true, copyCompactedFiles)
+
+    val sessionHadoopConf = spark.sessionState.newHadoopConf()
+    val fs = path.getFileSystem(sessionHadoopConf)
+    fs.setPermission(path, new FsPermission(FsAction.ALL, FsAction.ALL, FsAction.READ_EXECUTE))
 
     tc.createDataCommitInfo(newFiles, Seq.empty, "", -1)._1
   }
