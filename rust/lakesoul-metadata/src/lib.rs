@@ -9,7 +9,7 @@ use postgres_types::{FromSql, ToSql};
 use prost::Message;
 pub use tokio::runtime::{Builder, Runtime};
 pub use tokio_postgres::{Client, NoTls, Statement};
-use tokio_postgres::{Error, GenericClient, Row};
+use tokio_postgres::{Error, Row};
 
 use crate::pooled_client::PgConnection;
 pub use crate::pooled_client::PooledClient;
