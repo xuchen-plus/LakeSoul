@@ -31,10 +31,11 @@ import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.lakesoul.rules.withPartitionAndOrdering
 import org.apache.spark.sql.lakesoul.sources.LakeSoulSQLConf
-import org.apache.spark.sql.vectorized.ArrowFakeRowAdaptor
+import org.apache.spark.sql.vectorized.{ArrowFakeRowAdaptor, GlutenUtils}
 import org.apache.spark.util.{SerializableConfiguration, Utils}
 import com.dmetasoul.lakesoul.meta.DBConfig.{LAKESOUL_NON_PARTITION_TABLE_PART_DESC, LAKESOUL_RANGE_PARTITION_SPLITTER}
 import com.dmetasoul.lakesoul.spark.clean.CleanOldCompaction.splitCompactFilePath
+import org.apache.gluten.extension.columnar.heuristic.HeuristicTransform
 import org.apache.spark.sql.lakesoul.DelayedCopyCommitProtocol
 import org.apache.spark.sql.types.{DataTypes, StringType, StructField, StructType}
 
@@ -178,7 +179,7 @@ object LakeSoulFileWriter extends Logging {
     val nativeIOEnable = sparkSession.sessionState.conf.getConf(LakeSoulSQLConf.NATIVE_IO_ENABLE)
 
     def nativeWrap(plan: SparkPlan): RDD[InternalRow] = {
-      if (isCompaction && !isCDC && !isBucketNumChanged && nativeIOEnable) {
+      if ((isCompaction) && !isCDC && !isBucketNumChanged && nativeIOEnable) {
         plan match {
           case withPartitionAndOrdering(_, _, child) =>
             return nativeWrap(child)
@@ -190,7 +191,7 @@ object LakeSoulFileWriter extends Logging {
         ArrowFakeRowAdaptor(plan match {
           case ColumnarToRowExec(child) => child
           case UnaryExecNode(plan, child)
-            if plan.getClass.getName == "io.glutenproject.execution.VeloxColumnarToRowExec" => child
+            if plan.getClass.getName == "org.apache.execution.VeloxColumnarToRowExec" => child
           case WholeStageCodegenExec(ColumnarToRowExec(child)) => child
           case WholeStageCodegenExec(ProjectExec(_, child)) => child
           case _ => plan
@@ -218,6 +219,8 @@ object LakeSoulFileWriter extends Logging {
             orderingExpr,
             global = false,
             child = empty2NullPlan)
+          val transform = HeuristicTransform.static()
+          val plan = transform.apply(sortPlan)
 
           val maxWriters = sparkSession.sessionState.conf.maxConcurrentOutputFileWriters
           val concurrentWritersEnabled = maxWriters > 0 && sortColumns.isEmpty
