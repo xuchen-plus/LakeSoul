@@ -40,7 +40,7 @@ class NativeParquetOutputWriter(val path: String, dataSchema: StructType, timeZo
 
   protected val root: VectorSchemaRoot = VectorSchemaRoot.create(arrowSchema, allocator)
 
-  private val recordWriter: ArrowWriter = ArrowWriter.create(root)
+  val recordWriter: ArrowWriter = ArrowWriter.create(root)
 
   override def write(row: InternalRow): Unit = {
 
