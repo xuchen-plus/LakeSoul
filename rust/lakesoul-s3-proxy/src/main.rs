@@ -28,6 +28,7 @@ use std::net::{IpAddr, SocketAddrV4};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
+use pingora::http::ResponseHeader;
 
 fn main() {
     env_logger::init();
@@ -44,10 +45,6 @@ fn main() {
         (Ok(user), Ok(group)) => (user, group, true),
         _ => (String::new(), String::new(), false),
     };
-    info!(
-        "endpoint {}, region {}, virtual_host {}",
-        endpoint, region, virtual_host
-    );
 
     let uri = Uri::from_str(endpoint.as_str()).unwrap();
     let tls: bool = if let Some(scheme) = uri.scheme_str() {
@@ -65,6 +62,11 @@ fn main() {
             80
         }
     };
+    info!(
+        "endpoint {}, region {}, virtual_host {}, verify rbac {}, tls {}, port {}",
+        endpoint, region, virtual_host, verify_meta, tls, port
+    );
+
     let mut upstreams = LoadBalancer::from(DnsDiscovery::new(
         host,
         port,
@@ -86,6 +88,7 @@ fn main() {
             user,
             group,
             verify_meta,
+            virtual_host,
         },
     );
     let cred = background_s3_credentials.task();
@@ -97,7 +100,6 @@ fn main() {
             cred,
             host: String::from(host),
             tls,
-            virtual_host,
         },
     );
     lb.add_tcp("0.0.0.0:6188");
@@ -113,7 +115,6 @@ pub struct S3Proxy {
     cred: Arc<Credentials>,
     host: String,
     tls: bool,
-    virtual_host: bool,
 }
 
 pub struct Credentials {
@@ -123,10 +124,11 @@ pub struct Credentials {
     user: String,
     group: String,
     verify_meta: bool,
+    virtual_host: bool,
 }
 
 impl Credentials {
-    async fn verify_rbac(&self, headers: &RequestHeader, bucket: &Option<&str>) -> Result<(), anyhow::Error> {
+    async fn verify_rbac(&self, headers: &RequestHeader, bucket: &str) -> Result<(), anyhow::Error> {
         if !self.verify_meta {
             Ok(())
         } else {
@@ -148,7 +150,7 @@ impl Credentials {
         &self,
         headers: &mut RequestHeader,
         host: &String,
-        bucket: &Option<&str>,
+        bucket: &str,
     ) -> Result<(), anyhow::Error> {
         let mut signing_settings = SigningSettings::default();
         signing_settings.payload_checksum_kind = PayloadChecksumKind::XAmzSha256;
@@ -163,14 +165,23 @@ impl Credentials {
             .build()?
             .into();
 
-        let uri = headers.uri.to_string();
+        let mut uri = headers.uri.to_string();
+        debug!("original uri {}", uri);
 
         // for virtual host addressing, we need to replace host header
         // with format bucket-name.endpoint-host before signing
-        if let Some(bucket_name) = bucket {
-            let new_host = format!("{}.{}", bucket_name, host);
-            info!("new host {}", new_host);
+        if self.virtual_host {
+            // rewrite host
+            let new_host = format!("{}.{}", bucket, host);
+            debug!("new host {}", new_host);
             headers.insert_header(HOST, HeaderValue::try_from(new_host)?)?;
+            // rewrite path to remove bucket name
+            let start = uri.find(bucket).unwrap();
+            uri.replace_range(start..(start + bucket.len()), "");
+            uri = uri.replace("//", "/");
+            debug!("replaced uri {}", uri);
+        } else {
+            headers.insert_header(HOST, HeaderValue::try_from(host)?)?;
         }
 
         // construct request for signing by aws_sigv4
@@ -185,10 +196,10 @@ impl Credentials {
         )?;
         let (signing_instructions, _signature) = sign(signable_request, &signing_params)?.into_parts();
         let (new_headers, new_query) = signing_instructions.into_parts();
-        info!("new headers {:?}, new query {:?}", new_headers, new_query);
+        debug!("new headers {:?}, new query {:?}", new_headers, new_query);
 
         for header in new_headers.into_iter() {
-            let mut value = http::HeaderValue::from_str(&header.value())?;
+            let mut value = HeaderValue::from_str(&header.value())?;
             value.set_sensitive(header.sensitive());
             headers.insert_header(header.name(), value)?
         }
@@ -198,7 +209,10 @@ impl Credentials {
                 query.insert(name, &value);
             }
             headers.set_uri(query.build_uri().to_string().parse()?);
+        } else {
+            headers.set_uri(uri.parse()?);
         }
+        debug!("final all headers {:?}", headers);
         Ok(())
     }
 }
@@ -260,7 +274,7 @@ impl ProxyHttp for S3Proxy {
             .select(b"", 256) // hash doesn't matter for round robin
             .unwrap();
 
-        debug!("upstream peer is: {upstream:?}");
+        info!("upstream peer is: {upstream:?}, {0}", self.tls);
 
         let peer = Box::new(HttpPeer::new(upstream, self.tls, self.host.clone()));
         Ok(peer)
@@ -271,26 +285,16 @@ impl ProxyHttp for S3Proxy {
         Self::CTX: Send + Sync,
     {
         let header = session.req_header_mut();
-        info!("request_filter original header: {header:?}");
-        let mut bucket = None;
-        if self.virtual_host {
-            // replace host header
-            if let Some(host_header) = header.headers.get(HOST) {
-                match host_header.to_str() {
-                    Ok(s) => {
-                        if let Some(first_dot) = s.find(".") {
-                            bucket = Some(s[0..first_dot].to_string());
-                        }
-                    }
-                    Err(_) => {
-                        error!("failed to parse host header");
-                        session.respond_error(500).await?;
-                        return Ok(true);
-                    }
-                }
-            }
-        };
-        let bucket = bucket.as_ref().map(|b| b.as_str());
+        debug!("request_filter original header: {header:?}");
+        let bucket;
+        // we need to parse bucket name from uri component
+        if let Some(path) = header.uri.path().split("/").filter(|s| !s.is_empty()).next() {
+            bucket = path.to_string();
+        } else {
+            error!("Cannot determine bucket {:?}", header);
+            session.respond_error(503).await?;
+            return Ok(true);
+        }
 
         // verify meta permission
         match self.cred.verify_rbac(header, &bucket).await {
@@ -425,23 +429,19 @@ fn parse_table_path_from_query(query: &str, bucket_name: &str) -> String {
     format!("s3://{}/", bucket_name)
 }
 
-fn parse_table_path(uri: &Uri, bucket: &Option<&str>) -> String {
+fn parse_table_path(uri: &Uri, bucket: &str) -> String {
     let path = uri.path();
     let mut path_parts_iter = path.split("/").filter(|s| !s.is_empty()).peekable();
+    // skip bucket name because we already know it
+    path_parts_iter.next().unwrap();
 
-    let bucket_name = match bucket {
-        Some(b) => b,
-        None => {
-            // get first part of path as bucket name
-            path_parts_iter.next().unwrap()
-        }
-    };
+    let bucket_name = bucket;
     if let None = path_parts_iter.peek() {
         // a list request without path
         // retrieve path from query string
         let query = uri.query().unwrap_or("");
         if query.is_empty() {
-            format!("s3://{}/", bucket.unwrap())
+            format!("s3://{}/", bucket)
         } else {
             parse_table_path_from_query(query, bucket_name)
         }
@@ -457,14 +457,15 @@ mod tests {
     #[test]
     fn test_parse_table_path() {
         assert_eq!(
-            parse_table_path(&Uri::from_static("/lakesoul-test-bucket/test/test.parquet"), &None),
+            parse_table_path(&Uri::from_static("/lakesoul-test-bucket/test/test.parquet"),
+                             "lakesoul-test-bucket"),
             "s3://lakesoul-test-bucket/test/"
         );
 
         assert_eq!(
             parse_table_path(
                 &Uri::from_static("/lakesoul-test-bucket/test/default/abc/test.parquet"),
-                &None
+                "lakesoul-test-bucket"
             ),
             "s3://lakesoul-test-bucket/test/default/abc/"
         );
@@ -472,7 +473,7 @@ mod tests {
         assert_eq!(
             parse_table_path(
                 &Uri::from_static("/lakesoul-test-bucket/test/default/abc/test.parquet"),
-                &None
+                "lakesoul-test-bucket"
             ),
             "s3://lakesoul-test-bucket/test/default/abc/"
         );
@@ -480,37 +481,7 @@ mod tests {
         assert_eq!(
             parse_table_path(
                 &Uri::from_static("/lakesoul-test-bucket/test/default/abc/date=20250221/type=1/test.parquet"),
-                &None
-            ),
-            "s3://lakesoul-test-bucket/test/default/abc/"
-        );
-
-        // virtual host style
-        assert_eq!(
-            parse_table_path(&Uri::from_static("/test/test.parquet"), &Some("lakesoul-test-bucket")),
-            "s3://lakesoul-test-bucket/test/"
-        );
-
-        assert_eq!(
-            parse_table_path(
-                &Uri::from_static("/test/default/abc/test.parquet"),
-                &Some("lakesoul-test-bucket")
-            ),
-            "s3://lakesoul-test-bucket/test/default/abc/"
-        );
-
-        assert_eq!(
-            parse_table_path(
-                &Uri::from_static("/test/default/abc/test.parquet"),
-                &Some("lakesoul-test-bucket")
-            ),
-            "s3://lakesoul-test-bucket/test/default/abc/"
-        );
-
-        assert_eq!(
-            parse_table_path(
-                &Uri::from_static("/test/default/abc/date=20250221/type=1/test.parquet"),
-                &Some("lakesoul-test-bucket")
+                "lakesoul-test-bucket"
             ),
             "s3://lakesoul-test-bucket/test/default/abc/"
         );
@@ -521,7 +492,7 @@ mod tests {
                 &Uri::from_static(
                     "/lakesoul-test-bucket?list-type=2&prefix=test%2Fdefault%2Fabc%2Ftest.parquet&delimiter=%2F&encoding-type=url"
                 ),
-                &None
+                "lakesoul-test-bucket"
             ),
             "s3://lakesoul-test-bucket/test/default/abc/"
         );
@@ -530,16 +501,16 @@ mod tests {
                 &Uri::from_static(
                     "/lakesoul-test-bucket?list-type=2&prefix=test%2Fdefault%2Fabc%2Fdate%3D20250221%2Ftype=1%2Ftest.parquet&delimiter=%2F&encoding-type=url"
                 ),
-                &None
+                "lakesoul-test-bucket"
             ),
             "s3://lakesoul-test-bucket/test/default/abc/"
         );
         assert_eq!(
             parse_table_path(
                 &Uri::from_static(
-                    "/?list-type=2&prefix=test%2Fdefault%2Fabc%2Ftest.parquet&delimiter=%2F&encoding-type=url"
+                    "/lakesoul-test-bucket?list-type=2&prefix=test%2Fdefault%2Fabc%2Ftest.parquet&delimiter=%2F&encoding-type=url"
                 ),
-                &Some("lakesoul-test-bucket")
+                "lakesoul-test-bucket"
             ),
             "s3://lakesoul-test-bucket/test/default/abc/"
         );
