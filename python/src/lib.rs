@@ -7,6 +7,7 @@ use rootcause::Report;
 
 mod dataset;
 mod metadata;
+mod vector;
 
 type Result<T, E = Report> = std::result::Result<T, E>;
 
@@ -18,6 +19,7 @@ fn _lib(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
         .unwrap();
     metadata::init(py, m)?;
     dataset::init(py, m)?;
+    vector::init(py, m)?;
     Ok(())
 }
 
