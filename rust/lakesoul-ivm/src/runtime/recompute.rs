@@ -2647,7 +2647,7 @@ impl IvmRuntime {
         parts: &RecomputeParts<'_>,
     ) -> Result<Option<i64>> {
         let window = self
-            .collect_source_window(parts.view_id, parts.source)
+            .collect_source_window_for_filter(parts.view_id, parts.source, parts.filter)
             .await?;
         let lookup_window = match &parts.lookup {
             Some(lookup) => Some(
@@ -3690,7 +3690,11 @@ impl IvmRuntime {
         self.register_state_tables(&view.view_id, &[(StateRole::State, state)])
             .await?;
         let window = self
-            .collect_source_window(&view.view_id, &view.source)
+            .collect_source_window_for_filter(
+                &view.view_id,
+                &view.source,
+                view.filter.as_deref(),
+            )
             .await?;
         if window.added_files.is_empty() {
             return Ok(None);
@@ -4136,7 +4140,11 @@ impl IvmRuntime {
         self.register_state_tables(&view.view_id, &[(StateRole::MultiAggRows, state)])
             .await?;
         let window = self
-            .collect_source_window(&view.view_id, &view.source)
+            .collect_source_window_for_filter(
+                &view.view_id,
+                &view.source,
+                view.filter.as_deref(),
+            )
             .await?;
         if window.added_files.is_empty() {
             return Ok(None);

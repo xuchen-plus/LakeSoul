@@ -2368,7 +2368,11 @@ impl IvmRuntime {
         validate_sum_count_view(view)?;
 
         let window = self
-            .collect_source_window(&view.view_id, &view.source)
+            .collect_source_window_for_filter(
+                &view.view_id,
+                &view.source,
+                view.filter.as_deref(),
+            )
             .await?;
         if window.added_files.is_empty() {
             return Ok(None);
@@ -3058,7 +3062,7 @@ impl IvmRuntime {
         view.agg.result_type(&value_type)?;
 
         let window = self
-            .collect_source_window(view.view_id, view.source)
+            .collect_source_window_for_filter(view.view_id, view.source, view.filter)
             .await?;
         if window.added_files.is_empty() {
             return Ok(None);

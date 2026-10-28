@@ -1417,6 +1417,154 @@ async fn semi_anti_rows(
     rows
 }
 
+/// A constant partition filter pins the view to one day: changes in another
+/// day neither refresh the view nor leave its cursor behind.
+#[test_log::test(tokio::test)]
+async fn constant_partition_filter_skips_other_partitions() {
+    let runtime = IvmRuntime::from_env().await.unwrap();
+    runtime.init_schema().await.unwrap();
+    let dir = tempdir().unwrap();
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let source = create_source(&runtime, &dir, &suffix).await;
+    let mv = runtime
+        .create_table(
+            IvmTableOptions::new(
+                format!("ivm_part_filter_mv_{suffix}"),
+                table_path(&dir, "mv"),
+                multi_agg_mv_schema_for(
+                    &source.schema,
+                    &["g".to_string()],
+                    &[],
+                    &[
+                        ("cnt".to_string(), DataType::Int64),
+                        ("mx".to_string(), DataType::Int64),
+                    ],
+                )
+                .unwrap(),
+            )
+            .with_primary_keys(vec!["g".to_string()]),
+        )
+        .await
+        .unwrap();
+    source
+        .append_batch(
+            runtime.client(),
+            source_batch(&[
+                (1, "a", 10, "d1", "insert"),
+                (2, "b", 5, "d1", "insert"),
+                (3, "a", 7, "d2", "insert"),
+            ]),
+        )
+        .await
+        .unwrap();
+    let executor = IvmSqlExecutor::new(runtime);
+    let statement = format!(
+        "INSERT INTO ivm_part_filter_mv_{suffix}          SELECT g, COUNT(*) AS cnt, MAX(v) AS mx FROM ivm_part_src_{suffix}          WHERE day = 'd1' GROUP BY g"
+    );
+    let execution = executor.execute(&statement).await.unwrap();
+    assert_eq!(execution.action.label(), "bootstrap");
+    let runtime = executor.runtime();
+    assert_eq!(
+        read_group_values(runtime, &mv).await,
+        vec![("a".to_string(), 1, 10), ("b".to_string(), 1, 5)]
+    );
+
+    // A d2 change is outside the filter: no epoch, unchanged MV, but the
+    // source cursor for d2 must move past it.
+    source
+        .append_batch(
+            runtime.client(),
+            source_batch(&[(3, "a", 8, "d2", "insert")]),
+        )
+        .await
+        .unwrap();
+    let execution = executor.execute(&statement).await.unwrap();
+    assert_eq!(execution.action.label(), "incremental");
+    assert!(execution.epoch.is_none());
+    assert_eq!(
+        read_group_values(runtime, &mv).await,
+        vec![("a".to_string(), 1, 10), ("b".to_string(), 1, 5)]
+    );
+    let mut d2_version = 0;
+    for view in runtime.metadata().list_views().await.unwrap() {
+        for cursor in runtime
+            .metadata()
+            .list_cursors(&view.view_id)
+            .await
+            .unwrap()
+        {
+            if cursor.source_table_id == source.table_id
+                && cursor.partition_desc.contains("d2")
+            {
+                d2_version = d2_version.max(cursor.last_version);
+            }
+        }
+    }
+    assert!(
+        d2_version >= 1,
+        "the skipped d2 cursor was not advanced: {d2_version}"
+    );
+
+    // A d1 change still refreshes the view.
+    source
+        .append_batch(
+            runtime.client(),
+            source_batch(&[(1, "a", 12, "d1", "insert")]),
+        )
+        .await
+        .unwrap();
+    let execution = executor.execute(&statement).await.unwrap();
+    assert_eq!(execution.action.label(), "incremental");
+    assert!(execution.epoch.is_some());
+    assert_eq!(
+        read_group_values(runtime, &mv).await,
+        vec![("a".to_string(), 1, 12), ("b".to_string(), 1, 5)]
+    );
+}
+
+async fn read_group_values(
+    runtime: &IvmRuntime,
+    mv: &IvmTable,
+) -> Vec<(String, i64, i64)> {
+    let context = SessionContext::new();
+    context
+        .register_table("mv", Arc::new(runtime.table_provider(mv)))
+        .unwrap();
+    let batches = context
+        .sql("select g, cnt, mx from mv order by g")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let mut rows = Vec::new();
+    for batch in &batches {
+        let groups = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let counts = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let maxima = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            rows.push((
+                groups.value(row).to_string(),
+                counts.value(row),
+                maxima.value(row),
+            ));
+        }
+    }
+    rows
+}
+
 /// A source whose primary key contains the partition column: the injected
 /// value is part of the merge key, so an upsert in a partition replaces the
 /// stored row instead of duplicating it.

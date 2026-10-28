@@ -22,10 +22,10 @@ use arrow_array::Array;
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, DFSchema, NullEquality};
-use datafusion::logical_expr::ExprSchemable;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::logical_expr::when;
+use datafusion::logical_expr::{ExprSchemable, Operator};
 use datafusion::prelude::{
     DataFrame, Expr, JoinType, SessionConfig, SessionContext, col, lit,
 };
@@ -4852,6 +4852,119 @@ impl IvmRuntime {
     }
 
     /// Read the changelog window of every partition of a source.
+    /// The partitions a constant filter pins, as a range-partition
+    /// restriction.  Only equality and `IN` literals on a source partition
+    /// column are used; any other predicate leaves that column unrestricted.
+    fn filter_partition_restriction(
+        source: &IvmTable,
+        filter: Option<&str>,
+    ) -> Option<Vec<(String, Vec<String>)>> {
+        let filter = filter?;
+        if source.range_partition_columns.is_empty() {
+            return None;
+        }
+        let context = refresh_session();
+        let expression = parse_filter(&context, &source.schema, filter).ok()?;
+        let mut values: std::collections::HashMap<
+            String,
+            std::collections::BTreeSet<String>,
+        > = std::collections::HashMap::new();
+        Self::collect_partition_literals(
+            &expression,
+            &source.range_partition_columns,
+            &mut values,
+        );
+        if values.is_empty() {
+            return None;
+        }
+        Some(
+            values
+                .into_iter()
+                .map(|(column, values)| (column, values.into_iter().collect()))
+                .collect(),
+        )
+    }
+
+    fn collect_partition_literals(
+        expression: &Expr,
+        columns: &[String],
+        values: &mut std::collections::HashMap<
+            String,
+            std::collections::BTreeSet<String>,
+        >,
+    ) {
+        match expression {
+            Expr::BinaryExpr(binary) if binary.op == Operator::And => {
+                Self::collect_partition_literals(&binary.left, columns, values);
+                Self::collect_partition_literals(&binary.right, columns, values);
+            }
+            Expr::BinaryExpr(binary) if binary.op == Operator::Eq => {
+                let (column, literal) = match (&*binary.left, &*binary.right) {
+                    (Expr::Column(column), Expr::Literal(literal, _)) => {
+                        (column, literal)
+                    }
+                    (Expr::Literal(literal, _), Expr::Column(column)) => {
+                        (column, literal)
+                    }
+                    _ => return,
+                };
+                if columns.contains(&column.name) {
+                    values
+                        .entry(column.name.clone())
+                        .or_default()
+                        .insert(lakesoul_io::helpers::format_scalar_value(literal));
+                }
+            }
+            Expr::InList(list) if !list.negated => {
+                let Expr::Column(column) = list.expr.as_ref() else {
+                    return;
+                };
+                if !columns.contains(&column.name) {
+                    return;
+                }
+                for item in &list.list {
+                    if let Expr::Literal(literal, _) = item {
+                        values
+                            .entry(column.name.clone())
+                            .or_default()
+                            .insert(lakesoul_io::helpers::format_scalar_value(literal));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Collect the source window and drop the changed partitions a constant
+    /// filter excludes.  Skipped partitions still advance their cursors; they
+    /// cannot affect this view.
+    async fn collect_source_window_for_filter(
+        &self,
+        view_id: &str,
+        source: &IvmTable,
+        filter: Option<&str>,
+    ) -> Result<SourceWindow> {
+        let mut window = self.collect_source_window(view_id, source).await?;
+        let Some(restriction) = Self::filter_partition_restriction(source, filter) else {
+            return Ok(window);
+        };
+        let columns = &source.range_partition_columns;
+        window.added_files.retain(|group| {
+            crate::table::partition_matches(&group.partition_desc, columns, &restriction)
+        });
+        window.before_versions.retain(|desc, _| {
+            crate::table::partition_matches(desc, columns, &restriction)
+        });
+        window.identity.retain(|(_, desc, _, _)| {
+            crate::table::partition_matches(desc, columns, &restriction)
+        });
+        if window.added_files.is_empty() && !window.cursors.is_empty() {
+            self.advance_cursors(view_id, window.cursors.clone())
+                .await?;
+        }
+        Ok(window)
+    }
+
     async fn collect_source_window(
         &self,
         view_id: &str,

@@ -586,7 +586,11 @@ impl IvmRuntime {
         validate_row_view(view).await?;
 
         let window = self
-            .collect_source_window(&view.view_id, &view.source)
+            .collect_source_window_for_filter(
+                &view.view_id,
+                &view.source,
+                view.filter.as_deref(),
+            )
             .await?;
         // The scalar subquery inputs are watched as well: a change to one of
         // them can flip any row, so every known key is re-evaluated.
