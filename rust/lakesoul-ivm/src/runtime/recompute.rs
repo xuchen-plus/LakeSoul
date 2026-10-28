@@ -4295,9 +4295,16 @@ impl IvmRuntime {
         crate::observability::note_full_scan(&view.mv.table_name);
         context.register_table("mv", Arc::new(self.table_provider(&view.mv)))?;
         let parts = view.parts()?;
-        let frame = context
-            .sql(&recompute_refresh_sql(&parts, epoch, false))
-            .await?;
+        // A bootstrap writes only inserts into an empty MV: the delete side
+        // and its key ordering are unnecessary, and the global ORDER BY would
+        // sort the whole result in one plan.  Rebuild SQL streams the same
+        // groups in whatever order the aggregate produces them.
+        let sql = if bootstrap {
+            recompute_rebuild_sql(&parts, epoch)
+        } else {
+            recompute_refresh_sql(&parts, epoch, false)
+        };
+        let frame = context.sql(&sql).await?;
         commit_ids.extend(
             view.mv
                 .append_stream(&self.client, frame.execute_stream().await?)
