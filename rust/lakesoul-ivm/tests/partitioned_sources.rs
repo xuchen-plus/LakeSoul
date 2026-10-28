@@ -14,8 +14,9 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::prelude::SessionContext;
 use lakesoul_ivm::{
     IVM_ROW_KINDS_COLUMN, IvmRuntime, IvmSqlExecutor, IvmTable, IvmTableOptions,
-    JoinView, StateRole, keyed_join_output_primary_keys, keyed_join_view_schema_for,
-    multi_agg_mv_schema_for, row_mv_schema_for, sum_count_mv_schema_for,
+    JoinView, SemiAntiView, StateRole, keyed_join_output_primary_keys,
+    keyed_join_view_schema_for, multi_agg_mv_schema_for, row_mv_schema_for,
+    semi_anti_mv_schema_for, sum_count_mv_schema_for,
 };
 use lakesoul_metadata_proto::entity::{CommitOp, MetaInfo, PartitionInfo};
 use tempfile::tempdir;
@@ -1209,6 +1210,211 @@ async fn multi_agg_colliding_group_key_falls_back() {
         values,
         vec![("A".to_string(), 2, 20), ("B".to_string(), 1, 7),]
     );
+}
+
+/// Cross-side semi/anti lookups on partitioned sources: the join key carries
+/// the day, so the left state probe from the right delta and the right state
+/// probe from the left keys both prune to the changed days while key moves
+/// still retract the old match.
+#[test_log::test(tokio::test)]
+async fn semi_anti_cross_side_partition_pruning_is_correct() {
+    let runtime = IvmRuntime::from_env().await.unwrap();
+    runtime.init_schema().await.unwrap();
+    let dir = tempdir().unwrap();
+    let suffix = uuid::Uuid::new_v4().simple();
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("day", DataType::Utf8, false),
+        Field::new("g", DataType::Utf8, false),
+        Field::new("v", DataType::Int64, false),
+        Field::new(CHANGE_COLUMN, DataType::Utf8, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("rid", DataType::Int64, false),
+        Field::new("day", DataType::Utf8, false),
+        Field::new("g", DataType::Utf8, false),
+        Field::new(CHANGE_COLUMN, DataType::Utf8, false),
+    ]));
+    let left_batch = |rows: &[(i64, &str, &str, i64, &str)]| {
+        RecordBatch::try_new(
+            left_schema.clone(),
+            vec![
+                Arc::new(Int64Array::from_iter_values(rows.iter().map(|r| r.0))),
+                Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.1))),
+                Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.2))),
+                Arc::new(Int64Array::from_iter_values(rows.iter().map(|r| r.3))),
+                Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.4))),
+            ],
+        )
+        .unwrap()
+    };
+    let right_batch = |rows: &[(i64, &str, &str, &str)]| {
+        RecordBatch::try_new(
+            right_schema.clone(),
+            vec![
+                Arc::new(Int64Array::from_iter_values(rows.iter().map(|r| r.0))),
+                Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.1))),
+                Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.2))),
+                Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.3))),
+            ],
+        )
+        .unwrap()
+    };
+    let left = runtime
+        .create_table(
+            IvmTableOptions::new(
+                format!("ivm_cross_left_{suffix}"),
+                table_path(&dir, "left"),
+                left_schema.clone(),
+            )
+            .with_primary_keys(vec!["id".to_string(), "day".to_string()])
+            .with_cdc_column(CHANGE_COLUMN)
+            .with_range_partition_columns(vec!["day".to_string()]),
+        )
+        .await
+        .unwrap();
+    let right = runtime
+        .create_table(
+            IvmTableOptions::new(
+                format!("ivm_cross_right_{suffix}"),
+                table_path(&dir, "right"),
+                right_schema.clone(),
+            )
+            .with_primary_keys(vec!["rid".to_string(), "day".to_string()])
+            .with_cdc_column(CHANGE_COLUMN)
+            .with_range_partition_columns(vec!["day".to_string()]),
+        )
+        .await
+        .unwrap();
+    let mv = runtime
+        .create_table(
+            IvmTableOptions::new(
+                format!("ivm_cross_mv_{suffix}"),
+                table_path(&dir, "mv"),
+                semi_anti_mv_schema_for(
+                    &left_schema,
+                    &["id".to_string(), "day".to_string(), "g".to_string()],
+                )
+                .unwrap(),
+            )
+            .with_primary_keys(vec!["id".to_string(), "day".to_string()])
+            .with_range_partition_columns(vec!["day".to_string()]),
+        )
+        .await
+        .unwrap();
+    let mut view = SemiAntiView::new(
+        format!("cross_{suffix}"),
+        left.clone(),
+        right.clone(),
+        mv.clone(),
+        vec!["day".to_string(), "g".to_string()],
+        false,
+    );
+    view.output_columns = vec!["id".to_string(), "day".to_string(), "g".to_string()];
+    left.append_batch(
+        runtime.client(),
+        left_batch(&[(1, "d1", "g1", 10, "insert"), (2, "d2", "g2", 20, "insert")]),
+    )
+    .await
+    .unwrap();
+    right
+        .append_batch(
+            runtime.client(),
+            right_batch(&[(10, "d1", "g1", "insert"), (20, "d2", "g2", "insert")]),
+        )
+        .await
+        .unwrap();
+    runtime.refresh_semi_anti(&view).await.unwrap().unwrap();
+    assert_eq!(
+        semi_anti_rows(&runtime, &left, &right).await,
+        vec![
+            (1, "d1".to_string(), "g1".to_string()),
+            (2, "d2".to_string(), "g2".to_string())
+        ]
+    );
+
+    // The right match moves from d1 to d2 while the left row is updated in
+    // d1: the old d1 match must be retracted and the d2 match kept.
+    left.append_batch(
+        runtime.client(),
+        left_batch(&[(1, "d1", "g1", 11, "insert")]),
+    )
+    .await
+    .unwrap();
+    right
+        .append_batch(
+            runtime.client(),
+            right_batch(&[(10, "d1", "g1", "delete"), (11, "d2", "g3", "insert")]),
+        )
+        .await
+        .unwrap();
+    runtime.refresh_semi_anti(&view).await.unwrap().unwrap();
+    assert_eq!(
+        semi_anti_rows(&runtime, &left, &right).await,
+        vec![(2, "d2".to_string(), "g2".to_string())]
+    );
+
+    // A d2-only right change still reads the d2 left state.
+    right
+        .append_batch(runtime.client(), right_batch(&[(12, "d2", "g2", "insert")]))
+        .await
+        .unwrap();
+    runtime.refresh_semi_anti(&view).await.unwrap().unwrap();
+    assert_eq!(
+        semi_anti_rows(&runtime, &left, &right).await,
+        vec![(2, "d2".to_string(), "g2".to_string())]
+    );
+}
+
+async fn semi_anti_rows(
+    runtime: &IvmRuntime,
+    left: &IvmTable,
+    right: &IvmTable,
+) -> Vec<(i64, String, String)> {
+    let context = SessionContext::new();
+    context
+        .register_table("l", Arc::new(runtime.table_provider(left)))
+        .unwrap();
+    context
+        .register_table("r", Arc::new(runtime.table_provider(right)))
+        .unwrap();
+    let batches = context
+        .sql(&format!(
+            "select l.id, l.day, l.g from l where l.\"{CHANGE_COLUMN}\" <> 'delete' \
+             and exists (select 1 from r where r.\"{CHANGE_COLUMN}\" <> 'delete' \
+                         and r.day = l.day and r.g = l.g) order by l.id, l.day"
+        ))
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let mut rows = Vec::new();
+    for batch in &batches {
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let days = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let groups = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            rows.push((
+                ids.value(row),
+                days.value(row).to_string(),
+                groups.value(row).to_string(),
+            ));
+        }
+    }
+    rows
 }
 
 /// A source whose primary key contains the partition column: the injected

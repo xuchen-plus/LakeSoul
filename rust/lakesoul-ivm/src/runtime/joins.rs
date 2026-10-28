@@ -3389,12 +3389,28 @@ impl IvmRuntime {
             } else {
                 1
             };
-            let groups = groups_by_bucket(
-                left_state.current_groups(&self.client).await?,
-                bucket_count,
-            );
             let partition_columns =
                 plain_join_partition_columns(view, JoinSide::Left, left_state);
+            let key = super::keyed_plan::PkLookupKey::BinaryRow {
+                column: super::join_state::IVM_JOIN_KEY_COLUMN.to_string(),
+            };
+            let (contribution, inferred, materialized) = self
+                .materialize_for_partitions(
+                    context,
+                    contribution,
+                    &key,
+                    &partition_columns,
+                )
+                .await?;
+            let groups = match &inferred {
+                Some(restriction) => {
+                    left_state
+                        .current_groups_for_partitions(&self.client, restriction)
+                        .await?
+                }
+                None => left_state.current_groups(&self.client).await?,
+            };
+            let groups = groups_by_bucket(groups, bucket_count);
             let provider = IvmLookupTable::binary(
                 contribution,
                 left_state.clone(),
@@ -3404,6 +3420,11 @@ impl IvmRuntime {
                 true,
                 partition_columns,
             );
+            let provider = if materialized {
+                provider.with_prepruned_groups()
+            } else {
+                provider
+            };
             let frame = context.read_table(Arc::new(provider))?;
             let projections = view
                 .left
@@ -3506,12 +3527,23 @@ impl IvmRuntime {
         } else {
             1
         };
-        let groups = groups_by_bucket(
-            left_state.current_groups(&self.client).await?,
-            bucket_count,
-        );
         let partition_columns =
             plain_join_partition_columns(view, JoinSide::Left, left_state);
+        let key = super::keyed_plan::PkLookupKey::BinaryRow {
+            column: super::join_state::IVM_JOIN_KEY_COLUMN.to_string(),
+        };
+        let (contribution, inferred, materialized) = self
+            .materialize_for_partitions(context, contribution, &key, &partition_columns)
+            .await?;
+        let groups = match &inferred {
+            Some(restriction) => {
+                left_state
+                    .current_groups_for_partitions(&self.client, restriction)
+                    .await?
+            }
+            None => left_state.current_groups(&self.client).await?,
+        };
+        let groups = groups_by_bucket(groups, bucket_count);
         let provider = IvmLookupTable::binary(
             contribution,
             left_state.clone(),
@@ -3521,6 +3553,11 @@ impl IvmRuntime {
             true,
             partition_columns,
         );
+        let provider = if materialized {
+            provider.with_prepruned_groups()
+        } else {
+            provider
+        };
         let frame = context.read_table(std::sync::Arc::new(provider))?;
         let projections = view
             .left
@@ -3914,6 +3951,41 @@ impl IvmRuntime {
         Ok(current.union(before)?.distinct()?)
     }
 
+    /// Materialize a keyed contribution once so its partition values can be
+    /// read without executing the affected-key plan a second time.  Returns
+    /// the (possibly materialized) frame, the partition restriction, and
+    /// whether the frame was materialized.
+    async fn materialize_for_partitions(
+        &self,
+        context: &SessionContext,
+        contribution: DataFrame,
+        key: &super::keyed_plan::PkLookupKey,
+        partitions: &[String],
+    ) -> Result<(DataFrame, Option<Vec<(String, Vec<String>)>>, bool)> {
+        let Some(pairs) = super::keyed_plan::partition_pairs_for_key(
+            key,
+            partitions,
+            contribution.schema().as_arrow(),
+        ) else {
+            return Ok((contribution, None, false));
+        };
+        let batches = contribution.clone().collect().await?;
+        if batches.iter().all(|batch| batch.num_rows() == 0) {
+            // `read_batches` with no batches loses the schema; keep the lazy
+            // contribution when there is nothing to materialize.
+            return Ok((contribution, None, false));
+        }
+        let restriction =
+            super::keyed_plan::partition_restriction_from_batches(&batches, &pairs);
+        tracing::debug!(
+            ?pairs,
+            ?restriction,
+            "keyed lookup materialized partition values"
+        );
+        let materialized = context.read_batches(batches)?;
+        Ok((materialized, restriction, true))
+    }
+
     /// Read a source/MV as the keyed state for a join.  The contribution keys
     /// are matched to real table PK columns with `arrow::Row`; bucket routing
     /// uses the table's writer bucket columns when they are part of the key.
@@ -4038,7 +4110,26 @@ impl IvmRuntime {
             ?table_columns,
             "keyed source lookup routing"
         );
-        let groups = match partitions {
+        let partition_key = super::keyed_plan::PkLookupKey::Columns {
+            input_columns: input_columns.to_vec(),
+            table_columns: table_columns.to_vec(),
+        };
+        let (routed, inferred, materialized) = match partitions {
+            Some(_) => (routed, None, false),
+            None => {
+                self.materialize_for_partitions(
+                    context,
+                    routed,
+                    &partition_key,
+                    &table.range_partition_columns,
+                )
+                .await?
+            }
+        };
+        let restriction = partitions
+            .map(|restriction| restriction.to_vec())
+            .or(inferred);
+        let groups = match &restriction {
             Some(restriction) => {
                 table
                     .current_groups_for_partitions(&self.client, restriction)
@@ -4057,7 +4148,7 @@ impl IvmRuntime {
             route_columns,
             multi_match,
         );
-        let provider = if partitions.is_some() {
+        let provider = if materialized || partitions.is_some() {
             provider.with_prepruned_groups()
         } else {
             provider
@@ -4177,8 +4268,27 @@ impl IvmRuntime {
             None
         };
         let bucket_count = route_columns.as_ref().map_or(1, |_| bucket_count);
-        let groups =
-            groups_by_bucket(table.current_groups(&self.client).await?, bucket_count);
+        let key = super::keyed_plan::PkLookupKey::Columns {
+            input_columns: input_columns.to_vec(),
+            table_columns: table_columns.to_vec(),
+        };
+        let (input, inferred, materialized) = self
+            .materialize_for_partitions(
+                context,
+                input.clone(),
+                &key,
+                &table.range_partition_columns,
+            )
+            .await?;
+        let groups = match &inferred {
+            Some(restriction) => {
+                table
+                    .current_groups_for_partitions(&self.client, restriction)
+                    .await?
+            }
+            None => table.current_groups(&self.client).await?,
+        };
+        let groups = groups_by_bucket(groups, bucket_count);
         let provider = IvmLookupTable::columns(
             input.clone(),
             table.clone(),
@@ -4189,6 +4299,11 @@ impl IvmRuntime {
             route_columns,
             true,
         );
+        let provider = if materialized {
+            provider.with_prepruned_groups()
+        } else {
+            provider
+        };
         let frame = context.read_table(Arc::new(provider))?;
         let projections = table
             .schema
@@ -4268,10 +4383,23 @@ impl IvmRuntime {
         } else {
             1
         };
-        let groups = right_state.current_groups(&self.client).await?;
-        let groups = groups_by_bucket(groups, bucket_count);
         let partition_columns =
             plain_join_partition_columns(view, JoinSide::Right, right_state);
+        let key = super::keyed_plan::PkLookupKey::BinaryRow {
+            column: super::join_state::IVM_JOIN_KEY_COLUMN.to_string(),
+        };
+        let (contribution, inferred, materialized) = self
+            .materialize_for_partitions(context, contribution, &key, &partition_columns)
+            .await?;
+        let groups = match &inferred {
+            Some(restriction) => {
+                right_state
+                    .current_groups_for_partitions(&self.client, restriction)
+                    .await?
+            }
+            None => right_state.current_groups(&self.client).await?,
+        };
+        let groups = groups_by_bucket(groups, bucket_count);
         let provider = IvmLookupTable::binary(
             contribution,
             right_state.clone(),
@@ -4281,6 +4409,11 @@ impl IvmRuntime {
             true,
             partition_columns,
         );
+        let provider = if materialized {
+            provider.with_prepruned_groups()
+        } else {
+            provider
+        };
         let frame = context.read_table(Arc::new(provider))?;
         let right_columns = view
             .right

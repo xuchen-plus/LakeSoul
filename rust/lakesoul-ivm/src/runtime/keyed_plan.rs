@@ -1209,6 +1209,78 @@ impl ExecutionPlan for IvmPkLookupExec {
 /// reference the same lookup frame more than once (for example a join's
 /// `already` and `deletes` sides); reusing one physical lookup plan would
 /// consume its input partitions on the first execution.
+/// The `(partition column, contribution column)` pairs a lookup can prune
+/// by.  `None` means at least one partition column is not part of the lookup
+/// key, so the read must keep every partition.
+pub(crate) fn partition_pairs_for_key(
+    key: &PkLookupKey,
+    partitions: &[String],
+    contribution_schema: &Schema,
+) -> Option<Vec<(String, String)>> {
+    if partitions.is_empty() {
+        return None;
+    }
+    match key {
+        PkLookupKey::Columns {
+            input_columns,
+            table_columns,
+        } => partitions
+            .iter()
+            .map(|partition| {
+                let index = table_columns
+                    .iter()
+                    .position(|column| column == partition)?;
+                Some((partition.clone(), input_columns.get(index)?.clone()))
+            })
+            .collect(),
+        PkLookupKey::BinaryRow { .. } => partitions
+            .iter()
+            .map(|partition| {
+                contribution_schema.field_with_name(partition).ok()?;
+                Some((partition.clone(), partition.clone()))
+            })
+            .collect(),
+    }
+}
+
+/// The distinct partition values present in already-materialized contribution
+/// batches.  Empty or unparsable input returns `None`, which keeps every
+/// partition.
+pub(crate) fn partition_restriction_from_batches(
+    batches: &[RecordBatch],
+    pairs: &[(String, String)],
+) -> Option<Vec<(String, Vec<String>)>> {
+    if pairs.is_empty() {
+        return None;
+    }
+    let mut values: Vec<(String, std::collections::BTreeSet<String>)> = pairs
+        .iter()
+        .map(|(column, _)| (column.clone(), std::collections::BTreeSet::new()))
+        .collect();
+    let mut rows = 0usize;
+    for batch in batches {
+        for row in 0..batch.num_rows() {
+            for (index, (_, input)) in pairs.iter().enumerate() {
+                let array = batch.column_by_name(input)?;
+                let scalar = ScalarValue::try_from_array(array, row).ok()?;
+                values[index]
+                    .1
+                    .insert(lakesoul_io::helpers::format_scalar_value(&scalar));
+            }
+            rows += 1;
+        }
+    }
+    if rows == 0 {
+        return None;
+    }
+    Some(
+        values
+            .into_iter()
+            .map(|(column, values)| (column, values.into_iter().collect()))
+            .collect(),
+    )
+}
+
 pub(crate) struct IvmLookupTable {
     contribution: DataFrame,
     table: IvmTable,
@@ -1305,37 +1377,11 @@ impl IvmLookupTable {
             PkLookupKey::Columns { .. } => &self.table.range_partition_columns,
             PkLookupKey::BinaryRow { .. } => &self.partition_columns,
         };
-        if partitions.is_empty() {
-            return None;
-        }
-        let mut pairs = Vec::with_capacity(partitions.len());
-        match &self.key {
-            PkLookupKey::Columns {
-                input_columns,
-                table_columns,
-            } => {
-                for partition in partitions {
-                    let index = table_columns
-                        .iter()
-                        .position(|column| column == partition)?;
-                    pairs.push((partition.clone(), input_columns.get(index)?.clone()));
-                }
-            }
-            PkLookupKey::BinaryRow { .. } => {
-                // A binary state key hides its join-key columns.  The
-                // contribution still carries them under their join names; the
-                // caller only passes plain join keys that are also state
-                // partition columns, so every such column is safe to use.
-                for partition in partitions {
-                    self.contribution
-                        .schema()
-                        .as_arrow()
-                        .field_with_name(partition)
-                        .ok()?;
-                    pairs.push((partition.clone(), partition.clone()));
-                }
-            }
-        }
+        let pairs = partition_pairs_for_key(
+            &self.key,
+            partitions,
+            self.contribution.schema().as_arrow(),
+        )?;
         let frame = self
             .contribution
             .clone()
@@ -1349,32 +1395,7 @@ impl IvmLookupTable {
             .distinct()
             .ok()?;
         let batches = frame.collect().await.ok()?;
-        let mut values: Vec<(String, std::collections::BTreeSet<String>)> = pairs
-            .iter()
-            .map(|(column, _)| (column.clone(), std::collections::BTreeSet::new()))
-            .collect();
-        let mut rows = 0usize;
-        for batch in &batches {
-            for row in 0..batch.num_rows() {
-                for (index, (_, input)) in pairs.iter().enumerate() {
-                    let array = batch.column_by_name(input)?;
-                    let scalar = ScalarValue::try_from_array(array, row).ok()?;
-                    values[index]
-                        .1
-                        .insert(lakesoul_io::helpers::format_scalar_value(&scalar));
-                }
-                rows += 1;
-            }
-        }
-        if rows == 0 {
-            return None;
-        }
-        Some(
-            values
-                .into_iter()
-                .map(|(column, values)| (column, values.into_iter().collect()))
-                .collect(),
-        )
+        partition_restriction_from_batches(&batches, &pairs)
     }
 
     async fn build_plan(&self) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
