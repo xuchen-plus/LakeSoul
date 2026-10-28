@@ -2899,19 +2899,6 @@ pub(crate) struct AppendOutcome {
     pub(crate) deletes: u64,
 }
 
-/// The state table file count at which a refresh compacts it (0 disables).
-///
-/// A state table gains one file set per refresh; compaction rewrites the
-/// current logical state into one file per bucket so the state read (and the
-/// metadata) stays bounded.  The default is a compromise between write
-/// amplification and read latency for a few-minute refresh cadence.
-fn state_compaction_threshold() -> usize {
-    std::env::var("LAKESOUL_IVM_STATE_COMPACT_FILES")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(32)
-}
-
 impl IvmRuntime {
     /// The partition versions of every auxiliary state table of a view.
     ///
@@ -3010,72 +2997,6 @@ impl IvmRuntime {
                 &state_versions,
             )
             .await
-    }
-
-    /// Compact an auxiliary state table when it accumulated enough files.
-    pub(crate) async fn maybe_compact_state(&self, state: &IvmTable) -> Result<()> {
-        let threshold = state_compaction_threshold();
-        if threshold == 0 {
-            return Ok(());
-        }
-        let files = state.current_file_count(&self.client).await?;
-        if files < threshold {
-            return Ok(());
-        }
-        let started = std::time::Instant::now();
-        state.compact(&self.client).await?;
-        tracing::debug!(
-            table = %state.table_name,
-            files,
-            elapsed_ms = started.elapsed().as_millis() as u64,
-            "state compaction finished"
-        );
-        Ok(())
-    }
-
-    /// Compact every auxiliary state table registered for a view when it has
-    /// accumulated enough files.  This is the single generic compaction entry
-    /// point; operators only write state, they do not own compaction policy.
-    ///
-    /// The MV is compacted only when `LAKESOUL_IVM_MV_COMPACT_FILES` is set to
-    /// a non-zero threshold.  It is disabled by default because rewriting a
-    /// large output is much more expensive than compacting its small auxiliary
-    /// state tables.
-    pub async fn compact_view_states(&self, view_id: &str) -> Result<()> {
-        for state in self.metadata.list_states(view_id).await? {
-            if state.role == StateRole::Mv {
-                continue;
-            }
-            let table = self.open_table_by_id(&state.table_id).await?;
-            self.maybe_compact_state(&table).await?;
-        }
-        self.maybe_compact_mv(view_id).await
-    }
-
-    async fn maybe_compact_mv(&self, view_id: &str) -> Result<()> {
-        let threshold = std::env::var("LAKESOUL_IVM_MV_COMPACT_FILES")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(0);
-        if threshold == 0 {
-            return Ok(());
-        }
-        let Some(state) = self.metadata.get_state(view_id, StateRole::Mv).await? else {
-            return Ok(());
-        };
-        let table = self.open_table_by_id(&state.table_id).await?;
-        let files = table.current_file_count(&self.client).await?;
-        if files >= threshold {
-            let started = std::time::Instant::now();
-            table.compact(&self.client).await?;
-            tracing::debug!(
-                table = %table.table_name,
-                files,
-                elapsed_ms = started.elapsed().as_millis() as u64,
-                "mv compaction finished"
-            );
-        }
-        Ok(())
     }
 
     /// The estimated live row count of a view, when known.
@@ -4415,9 +4336,6 @@ impl IvmRuntime {
             rows_written = io.rows_written(),
             "view refresh finished"
         );
-        if result.is_ok() {
-            self.compact_view_states(spec.view_id()).await?;
-        }
         result
     }
 
@@ -4488,7 +4406,6 @@ impl IvmRuntime {
             "view rebuild finished"
         );
         if result.is_ok() {
-            self.compact_view_states(spec.view_id()).await?;
             crate::observability::record_rebuild(kind, started.elapsed());
         }
         result
@@ -5089,9 +5006,9 @@ impl IvmRuntime {
         });
     }
 
-    fn partition_column_literal<'a>(
-        binary: &'a datafusion::logical_expr::BinaryExpr,
-    ) -> Option<(&'a Column, &'a ScalarValue)> {
+    fn partition_column_literal(
+        binary: &datafusion::logical_expr::BinaryExpr,
+    ) -> Option<(&Column, &ScalarValue)> {
         match (&*binary.left, &*binary.right) {
             (Expr::Column(column), other) => {
                 Self::partition_literal(other).map(|literal| (column, literal))

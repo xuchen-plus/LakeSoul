@@ -85,8 +85,7 @@ fn last_refresh_trace(buffer: &Arc<Mutex<Vec<u8>>>, kind: &str) -> String {
     let line = text
         .lines()
         .filter(|line| line.contains("view refresh finished"))
-        .filter(|line| strip_ansi(line).contains(&needle))
-        .next_back()
+        .rfind(|line| strip_ansi(line).contains(&needle))
         .expect("a refresh trace line");
     strip_ansi(line)
 }
