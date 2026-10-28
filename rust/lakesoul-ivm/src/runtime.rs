@@ -21,7 +21,7 @@ use arrow_array::Array;
 
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion::common::{Column, DFSchema, NullEquality};
+use datafusion::common::{Column, DFSchema, NullEquality, ScalarValue};
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::logical_expr::when;
@@ -2197,6 +2197,82 @@ fn group_key_fields(
             Ok(Arc::new(Field::new(key, data_type, nullable)) as arrow_schema::FieldRef)
         })
         .collect()
+}
+
+/// One condition on a range-partition column extracted from a view filter.
+#[derive(Debug, Clone)]
+enum PartitionCondition {
+    In {
+        column: String,
+        values: std::collections::BTreeSet<String>,
+    },
+    Cmp {
+        column: String,
+        op: Operator,
+        value: String,
+        number: Option<i128>,
+    },
+}
+
+impl PartitionCondition {
+    fn column(&self) -> &str {
+        match self {
+            Self::In { column, .. } | Self::Cmp { column, .. } => column,
+        }
+    }
+
+    fn matches(&self, value: &str) -> Option<bool> {
+        match self {
+            Self::In { values, .. } => Some(values.contains(value)),
+            Self::Cmp {
+                op,
+                value: expected,
+                number,
+                ..
+            } => {
+                if let Some(number) = number {
+                    let actual = value.parse::<i128>().ok()?;
+                    Some(match op {
+                        Operator::Gt => actual > *number,
+                        Operator::GtEq => actual >= *number,
+                        Operator::Lt => actual < *number,
+                        Operator::LtEq => actual <= *number,
+                        _ => return None,
+                    })
+                } else {
+                    Some(match op {
+                        Operator::Gt => value > expected.as_str(),
+                        Operator::GtEq => value >= expected.as_str(),
+                        Operator::Lt => value < expected.as_str(),
+                        Operator::LtEq => value <= expected.as_str(),
+                        _ => return None,
+                    })
+                }
+            }
+        }
+    }
+}
+
+/// A conjunction of constant partition conditions from a view filter.
+#[derive(Debug, Clone, Default)]
+struct PartitionPredicate {
+    conditions: Vec<PartitionCondition>,
+}
+
+impl PartitionPredicate {
+    fn matches(&self, descriptor: &str, columns: &[String]) -> Option<bool> {
+        let values = crate::table::parse_partition_values(descriptor, columns)?;
+        for condition in &self.conditions {
+            let index = columns
+                .iter()
+                .position(|column| column == condition.column())?;
+            let value = values.get(index)?;
+            if !condition.matches(value)? {
+                return Some(false);
+            }
+        }
+        Some(true)
+    }
 }
 
 /// The IVM runtime: a metadata client plus the `ivm` schema access layer.
@@ -4679,6 +4755,24 @@ impl IvmRuntime {
         })
     }
 
+    /// The source baseline restricted to the partitions a constant filter can
+    /// match.  Cursors and versions still cover every partition, so future
+    /// windows start from the same boundary.
+    async fn source_baseline_for_filter(
+        &self,
+        source: &IvmTable,
+        filter: Option<&str>,
+    ) -> Result<SourceBaseline> {
+        let mut baseline = self.source_baseline(source).await?;
+        if let Some(predicate) = Self::filter_partition_predicate(source, filter) {
+            baseline.groups.retain(|group| {
+                predicate.matches(&group.partition_desc, &source.range_partition_columns)
+                    != Some(false)
+            });
+        }
+        Ok(baseline)
+    }
+
     async fn source_baseline_meta(
         &self,
         source: &IvmTable,
@@ -4852,86 +4946,168 @@ impl IvmRuntime {
     }
 
     /// Read the changelog window of every partition of a source.
-    /// The partitions a constant filter pins, as a range-partition
-    /// restriction.  Only equality and `IN` literals on a source partition
-    /// column are used; any other predicate leaves that column unrestricted.
-    fn filter_partition_restriction(
+    /// A condition on one range-partition column extracted from a view filter.
+    fn filter_partition_predicate(
         source: &IvmTable,
         filter: Option<&str>,
-    ) -> Option<Vec<(String, Vec<String>)>> {
+    ) -> Option<PartitionPredicate> {
         let filter = filter?;
         if source.range_partition_columns.is_empty() {
             return None;
         }
         let context = refresh_session();
         let expression = parse_filter(&context, &source.schema, filter).ok()?;
-        let mut values: std::collections::HashMap<
-            String,
-            std::collections::BTreeSet<String>,
-        > = std::collections::HashMap::new();
-        Self::collect_partition_literals(
-            &expression,
-            &source.range_partition_columns,
-            &mut values,
-        );
-        if values.is_empty() {
-            return None;
-        }
-        Some(
-            values
-                .into_iter()
-                .map(|(column, values)| (column, values.into_iter().collect()))
-                .collect(),
-        )
+        let mut predicate = PartitionPredicate::default();
+        Self::collect_partition_conditions(&expression, source, &mut predicate);
+        (!predicate.conditions.is_empty()).then_some(predicate)
     }
 
-    fn collect_partition_literals(
+    fn collect_partition_conditions(
         expression: &Expr,
-        columns: &[String],
-        values: &mut std::collections::HashMap<
-            String,
-            std::collections::BTreeSet<String>,
-        >,
+        source: &IvmTable,
+        predicate: &mut PartitionPredicate,
     ) {
         match expression {
             Expr::BinaryExpr(binary) if binary.op == Operator::And => {
-                Self::collect_partition_literals(&binary.left, columns, values);
-                Self::collect_partition_literals(&binary.right, columns, values);
+                Self::collect_partition_conditions(&binary.left, source, predicate);
+                Self::collect_partition_conditions(&binary.right, source, predicate);
             }
             Expr::BinaryExpr(binary) if binary.op == Operator::Eq => {
-                let (column, literal) = match (&*binary.left, &*binary.right) {
-                    (Expr::Column(column), Expr::Literal(literal, _)) => {
-                        (column, literal)
-                    }
-                    (Expr::Literal(literal, _), Expr::Column(column)) => {
-                        (column, literal)
-                    }
-                    _ => return,
-                };
-                if columns.contains(&column.name) {
-                    values
-                        .entry(column.name.clone())
-                        .or_default()
-                        .insert(lakesoul_io::helpers::format_scalar_value(literal));
+                if let Some((column, literal)) = Self::partition_column_literal(binary)
+                    && source.range_partition_columns.contains(&column.name)
+                {
+                    predicate.conditions.push(PartitionCondition::In {
+                        column: column.name.clone(),
+                        values: [lakesoul_io::helpers::format_scalar_value(literal)]
+                            .into_iter()
+                            .collect(),
+                    });
                 }
             }
             Expr::InList(list) if !list.negated => {
                 let Expr::Column(column) = list.expr.as_ref() else {
                     return;
                 };
-                if !columns.contains(&column.name) {
+                if !source.range_partition_columns.contains(&column.name) {
                     return;
                 }
+                let mut values = std::collections::BTreeSet::new();
                 for item in &list.list {
-                    if let Expr::Literal(literal, _) = item {
-                        values
-                            .entry(column.name.clone())
-                            .or_default()
-                            .insert(lakesoul_io::helpers::format_scalar_value(literal));
-                    }
+                    let Some(literal) = Self::partition_literal(item) else {
+                        // A non-literal item makes a partial IN unsound.
+                        return;
+                    };
+                    values.insert(lakesoul_io::helpers::format_scalar_value(literal));
+                }
+                if !values.is_empty() {
+                    predicate.conditions.push(PartitionCondition::In {
+                        column: column.name.clone(),
+                        values,
+                    });
                 }
             }
+            Expr::BinaryExpr(binary)
+                if matches!(
+                    binary.op,
+                    Operator::Gt | Operator::GtEq | Operator::Lt | Operator::LtEq
+                ) =>
+            {
+                if let Some((column, literal)) = Self::partition_column_literal(binary) {
+                    Self::push_partition_comparison(
+                        source, predicate, column, literal, binary.op,
+                    );
+                }
+            }
+            Expr::Between(between) if !between.negated => {
+                let Expr::Column(column) = between.expr.as_ref() else {
+                    return;
+                };
+                let (Some(low), Some(high)) = (
+                    Self::partition_literal(&between.low),
+                    Self::partition_literal(&between.high),
+                ) else {
+                    return;
+                };
+                Self::push_partition_comparison(
+                    source,
+                    predicate,
+                    column,
+                    low,
+                    Operator::GtEq,
+                );
+                Self::push_partition_comparison(
+                    source,
+                    predicate,
+                    column,
+                    high,
+                    Operator::LtEq,
+                );
+            }
             _ => {}
+        }
+    }
+
+    fn push_partition_comparison(
+        source: &IvmTable,
+        predicate: &mut PartitionPredicate,
+        column: &Column,
+        literal: &ScalarValue,
+        op: Operator,
+    ) {
+        if !source.range_partition_columns.contains(&column.name) {
+            return;
+        }
+        let Ok(field) = source.schema.field_with_name(&column.name) else {
+            return;
+        };
+        let value = lakesoul_io::helpers::format_scalar_value(literal);
+        let number = match field.data_type() {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => match value.parse::<i128>() {
+                Ok(number) => Some(number),
+                Err(_) => return,
+            },
+            DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Utf8View
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Timestamp(_, _) => None,
+            _ => return,
+        };
+        predicate.conditions.push(PartitionCondition::Cmp {
+            column: column.name.clone(),
+            op,
+            value,
+            number,
+        });
+    }
+
+    fn partition_column_literal<'a>(
+        binary: &'a datafusion::logical_expr::BinaryExpr,
+    ) -> Option<(&'a Column, &'a ScalarValue)> {
+        match (&*binary.left, &*binary.right) {
+            (Expr::Column(column), other) => {
+                Self::partition_literal(other).map(|literal| (column, literal))
+            }
+            (other, Expr::Column(column)) => {
+                Self::partition_literal(other).map(|literal| (column, literal))
+            }
+            _ => None,
+        }
+    }
+
+    fn partition_literal(expression: &Expr) -> Option<&ScalarValue> {
+        match expression {
+            Expr::Literal(literal, _) => Some(literal),
+            Expr::Cast(cast) => Self::partition_literal(&cast.expr),
+            _ => None,
         }
     }
 
@@ -4945,19 +5121,16 @@ impl IvmRuntime {
         filter: Option<&str>,
     ) -> Result<SourceWindow> {
         let mut window = self.collect_source_window(view_id, source).await?;
-        let Some(restriction) = Self::filter_partition_restriction(source, filter) else {
+        let Some(predicate) = Self::filter_partition_predicate(source, filter) else {
             return Ok(window);
         };
         let columns = &source.range_partition_columns;
-        window.added_files.retain(|group| {
-            crate::table::partition_matches(&group.partition_desc, columns, &restriction)
-        });
-        window.before_versions.retain(|desc, _| {
-            crate::table::partition_matches(desc, columns, &restriction)
-        });
-        window.identity.retain(|(_, desc, _, _)| {
-            crate::table::partition_matches(desc, columns, &restriction)
-        });
+        let keep = |desc: &str| predicate.matches(desc, columns) != Some(false);
+        window
+            .added_files
+            .retain(|group| keep(&group.partition_desc));
+        window.before_versions.retain(|desc, _| keep(desc));
+        window.identity.retain(|(_, desc, _, _)| keep(desc));
         if window.added_files.is_empty() && !window.cursors.is_empty() {
             self.advance_cursors(view_id, window.cursors.clone())
                 .await?;

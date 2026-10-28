@@ -1565,6 +1565,204 @@ async fn read_group_values(
     rows
 }
 
+/// A range predicate on the partition column (`>=` / `<=` and `BETWEEN`)
+/// prunes partitions outside the range for bootstrap and increments.
+#[test_log::test(tokio::test)]
+async fn range_partition_filter_prunes_outside_partitions() {
+    for predicate in ["day >= 'd2' AND day <= 'd3'", "day BETWEEN 'd2' AND 'd3'"] {
+        let runtime = IvmRuntime::from_env().await.unwrap();
+        runtime.init_schema().await.unwrap();
+        let dir = tempdir().unwrap();
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let source = create_source(&runtime, &dir, &suffix).await;
+        let mv = runtime
+            .create_table(
+                IvmTableOptions::new(
+                    format!("ivm_part_range_mv_{suffix}"),
+                    table_path(&dir, "mv"),
+                    multi_agg_mv_schema_for(
+                        &source.schema,
+                        &["g".to_string()],
+                        &[],
+                        &[
+                            ("cnt".to_string(), DataType::Int64),
+                            ("mx".to_string(), DataType::Int64),
+                        ],
+                    )
+                    .unwrap(),
+                )
+                .with_primary_keys(vec!["g".to_string()]),
+            )
+            .await
+            .unwrap();
+        source
+            .append_batch(
+                runtime.client(),
+                source_batch(&[
+                    (1, "a", 10, "d1", "insert"),
+                    (2, "b", 20, "d2", "insert"),
+                    (3, "c", 30, "d3", "insert"),
+                    (4, "d", 40, "d4", "insert"),
+                ]),
+            )
+            .await
+            .unwrap();
+        let executor = IvmSqlExecutor::new(runtime);
+        let statement = format!(
+            "INSERT INTO ivm_part_range_mv_{suffix} \
+             SELECT g, COUNT(*) AS cnt, MAX(v) AS mx FROM ivm_part_src_{suffix} \
+             WHERE {predicate} GROUP BY g"
+        );
+        let execution = executor.execute(&statement).await.unwrap();
+        assert_eq!(execution.action.label(), "bootstrap");
+        let runtime = executor.runtime();
+        assert_eq!(
+            read_group_values(runtime, &mv).await,
+            vec![("b".to_string(), 1, 20), ("c".to_string(), 1, 30)]
+        );
+
+        // Changes outside the range are skipped.
+        source
+            .append_batch(
+                runtime.client(),
+                source_batch(&[
+                    (1, "a", 11, "d1", "insert"),
+                    (4, "d", 41, "d4", "insert"),
+                ]),
+            )
+            .await
+            .unwrap();
+        let execution = executor.execute(&statement).await.unwrap();
+        assert_eq!(execution.action.label(), "incremental");
+        assert!(execution.epoch.is_none());
+        assert_eq!(
+            read_group_values(runtime, &mv).await,
+            vec![("b".to_string(), 1, 20), ("c".to_string(), 1, 30)]
+        );
+
+        // A change inside the range refreshes the view.
+        source
+            .append_batch(
+                runtime.client(),
+                source_batch(&[(2, "b", 22, "d2", "insert")]),
+            )
+            .await
+            .unwrap();
+        let execution = executor.execute(&statement).await.unwrap();
+        assert_eq!(execution.action.label(), "incremental");
+        assert!(execution.epoch.is_some());
+        assert_eq!(
+            read_group_values(runtime, &mv).await,
+            vec![("b".to_string(), 1, 22), ("c".to_string(), 1, 30)]
+        );
+    }
+}
+
+/// A filtered sum/count view rebuilds from the matching partition only.
+#[test_log::test(tokio::test)]
+async fn filtered_view_rebuild_uses_partition_scope() {
+    let runtime = IvmRuntime::from_env().await.unwrap();
+    runtime.init_schema().await.unwrap();
+    let dir = tempdir().unwrap();
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let source = create_source(&runtime, &dir, &suffix).await;
+    let mv = runtime
+        .create_table(
+            IvmTableOptions::new(
+                format!("ivm_part_rebuild_mv_{suffix}"),
+                table_path(&dir, "mv"),
+                sum_count_mv_schema_for(&source.schema, &["g".to_string()], Some("v"))
+                    .unwrap(),
+            )
+            .with_primary_keys(vec!["g".to_string()]),
+        )
+        .await
+        .unwrap();
+    source
+        .append_batch(
+            runtime.client(),
+            source_batch(&[
+                (1, "a", 10, "d1", "insert"),
+                (2, "b", 5, "d1", "insert"),
+                (3, "a", 7, "d2", "insert"),
+            ]),
+        )
+        .await
+        .unwrap();
+    let executor = IvmSqlExecutor::new(runtime);
+    let statement = format!(
+        "INSERT INTO ivm_part_rebuild_mv_{suffix} \
+         SELECT g, SUM(v) AS sum_v, COUNT(*) AS count_v FROM ivm_part_src_{suffix} \
+         WHERE day = 'd1' GROUP BY g"
+    );
+    let execution = executor.execute(&statement).await.unwrap();
+    assert_eq!(execution.action.label(), "bootstrap");
+    let runtime = executor.runtime();
+    assert_eq!(
+        read_sum_count(runtime, &mv).await,
+        vec![("a".to_string(), 10, 1), ("b".to_string(), 5, 1)]
+    );
+
+    source
+        .append_batch(
+            runtime.client(),
+            source_batch(&[(3, "a", 8, "d2", "insert"), (1, "a", 12, "d1", "insert")]),
+        )
+        .await
+        .unwrap();
+    let overwrite = statement.replacen("INSERT INTO", "INSERT OVERWRITE", 1);
+    let execution = executor.execute(&overwrite).await.unwrap();
+    assert!(
+        matches!(execution.action.label(), "overwrite" | "rebuild"),
+        "unexpected action {}",
+        execution.action.label()
+    );
+    assert_eq!(
+        read_sum_count(executor.runtime(), &mv).await,
+        vec![("a".to_string(), 12, 1), ("b".to_string(), 5, 1)]
+    );
+}
+
+async fn read_sum_count(runtime: &IvmRuntime, mv: &IvmTable) -> Vec<(String, i64, i64)> {
+    let context = SessionContext::new();
+    context
+        .register_table("mv", Arc::new(runtime.table_provider(mv)))
+        .unwrap();
+    let batches = context
+        .sql("select g, sum_v, count_v from mv order by g")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let mut rows = Vec::new();
+    for batch in &batches {
+        let groups = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let sums = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let counts = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            rows.push((
+                groups.value(row).to_string(),
+                sums.value(row),
+                counts.value(row),
+            ));
+        }
+    }
+    rows
+}
+
 /// A source whose primary key contains the partition column: the injected
 /// value is part of the merge key, so an upsert in a partition replaces the
 /// stored row instead of duplicating it.

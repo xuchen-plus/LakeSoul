@@ -1444,8 +1444,12 @@ impl IvmRuntime {
         self.metadata.delete_cursors(&view.view_id).await?;
         view.mv.truncate(&self.client).await?;
 
-        let left_baseline = self.source_baseline(&view.left).await?;
-        let right_baseline = self.source_baseline(&view.right).await?;
+        let left_baseline = self
+            .source_baseline_for_filter(&view.left, view.left_filter.as_deref())
+            .await?;
+        let right_baseline = self
+            .source_baseline_for_filter(&view.right, view.right_filter.as_deref())
+            .await?;
         let to_versions = left_baseline
             .to_versions
             .iter()
@@ -2484,8 +2488,12 @@ impl IvmRuntime {
         self.metadata.delete_cursors(&view.view_id).await?;
         view.mv.truncate(&self.client).await?;
 
-        let left_baseline = self.source_baseline(&view.left).await?;
-        let right_baseline = self.source_baseline(&view.right).await?;
+        let left_baseline = self
+            .source_baseline_for_filter(&view.left, view.left_filter.as_deref())
+            .await?;
+        let right_baseline = self
+            .source_baseline_for_filter(&view.right, view.right_filter.as_deref())
+            .await?;
         let mv_versions_before =
             output_partition_versions(&self.client, &view.mv).await?;
         let mut to_versions = left_baseline.to_versions.clone();

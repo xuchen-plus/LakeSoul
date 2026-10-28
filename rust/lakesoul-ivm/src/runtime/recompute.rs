@@ -2836,7 +2836,9 @@ impl IvmRuntime {
         self.metadata.delete_cursors(parts.view_id).await?;
         parts.mv.truncate(&self.client).await?;
 
-        let baseline = self.source_baseline(parts.source).await?;
+        let baseline = self
+            .source_baseline_for_filter(parts.source, parts.filter)
+            .await?;
         let mv_versions_before =
             output_partition_versions(&self.client, parts.mv).await?;
         let record = match self

@@ -3135,7 +3135,9 @@ impl IvmRuntime {
         self.metadata.delete_cursors(&view.view_id).await?;
         view.mv.truncate(&self.client).await?;
 
-        let baseline = self.source_baseline(&view.source).await?;
+        let baseline = self
+            .source_baseline_for_filter(&view.source, view.filter.as_deref())
+            .await?;
         let mv_versions_before =
             output_partition_versions(&self.client, &view.mv).await?;
         let record = match self
@@ -3221,7 +3223,9 @@ impl IvmRuntime {
         view.mv.truncate(&self.client).await?;
         state.truncate(&self.client).await?;
 
-        let baseline = self.source_baseline(&view.source).await?;
+        let baseline = self
+            .source_baseline_for_filter(&view.source, view.filter.as_deref())
+            .await?;
         let mv_versions_before =
             output_partition_versions(&self.client, &view.mv).await?;
         let record = match self
@@ -3899,7 +3903,9 @@ impl IvmRuntime {
         view.mv.truncate(&self.client).await?;
         state.truncate(&self.client).await?;
 
-        let baseline = self.source_baseline(&view.source).await?;
+        let baseline = self
+            .source_baseline_for_filter(&view.source, view.filter.as_deref())
+            .await?;
         let mv_versions_before =
             output_partition_versions(&self.client, &view.mv).await?;
         let record = match self

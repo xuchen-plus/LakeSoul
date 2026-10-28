@@ -1009,7 +1009,10 @@ impl IvmRuntime {
 
         let mut baselines = Vec::new();
         for source in &view.sources {
-            baselines.push(self.source_baseline(&source.table).await?);
+            baselines.push(
+                self.source_baseline_for_filter(&source.table, source.filter.as_deref())
+                    .await?,
+            );
         }
         let to_versions = baselines
             .iter()
@@ -1245,7 +1248,10 @@ impl IvmRuntime {
 
         let mut baselines = Vec::new();
         for source in &view.sources {
-            baselines.push(self.source_baseline(&source.table).await?);
+            baselines.push(
+                self.source_baseline_for_filter(&source.table, source.filter.as_deref())
+                    .await?,
+            );
         }
         let to_versions = baselines
             .iter()
