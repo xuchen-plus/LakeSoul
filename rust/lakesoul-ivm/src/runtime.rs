@@ -4275,7 +4275,7 @@ impl IvmRuntime {
             "view refresh started"
         );
         let view = self.spec_view(spec).await;
-        let result = crate::observability::scope_refresh_io(kind, async {
+        let (result, io) = crate::observability::scope_refresh_io(kind, async {
             match view {
                 Ok(SpecView::SumCount(view)) => self.refresh_sum_count(&view).await,
                 Ok(SpecView::Variance(view)) => self.refresh_variance(&view).await,
@@ -4331,6 +4331,12 @@ impl IvmRuntime {
             view_id = %spec.view_id(),
             applied = matches!(result, Ok(Some(_))),
             elapsed_ms = started.elapsed().as_millis() as u64,
+            full_scan = io.full_scans() > 0,
+            full_scans = io.full_scans(),
+            full_scan_tables = ?io.full_scan_tables(),
+            files_read = io.files_read(),
+            rows_scanned = io.rows_scanned(),
+            rows_written = io.rows_written(),
             "view refresh finished"
         );
         if result.is_ok() {
@@ -4347,7 +4353,7 @@ impl IvmRuntime {
         let kind = spec.kind();
         let started = std::time::Instant::now();
         let view = self.spec_view(spec).await;
-        let result = crate::observability::scope_refresh_io(kind, async {
+        let (result, io) = crate::observability::scope_refresh_io(kind, async {
             match view {
                 Ok(SpecView::SumCount(view)) => self.rebuild_sum_count(&view).await,
                 Ok(SpecView::Variance(view)) => self.rebuild_variance(&view).await,
@@ -4393,6 +4399,18 @@ impl IvmRuntime {
             }
         })
         .await;
+        tracing::debug!(
+            kind,
+            view_id = %spec.view_id(),
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            full_scan = io.full_scans() > 0,
+            full_scans = io.full_scans(),
+            full_scan_tables = ?io.full_scan_tables(),
+            files_read = io.files_read(),
+            rows_scanned = io.rows_scanned(),
+            rows_written = io.rows_written(),
+            "view rebuild finished"
+        );
         if result.is_ok() {
             self.compact_view_states(spec.view_id()).await?;
             crate::observability::record_rebuild(kind, started.elapsed());
@@ -4469,6 +4487,7 @@ impl IvmRuntime {
         context: &SessionContext,
         table: &IvmTable,
     ) -> Result<DataFrame> {
+        crate::observability::note_full_scan(&table.table_name);
         Ok(context.read_table(Arc::new(self.table_provider(table)))?)
     }
 

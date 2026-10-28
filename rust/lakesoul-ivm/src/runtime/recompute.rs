@@ -4228,6 +4228,7 @@ impl IvmRuntime {
         };
         let src = project_frame(state_rows, &source_fields)?;
         context.register_table("src", src.into_view())?;
+        crate::observability::note_full_scan(&view.mv.table_name);
         context.register_table("mv", Arc::new(self.table_provider(&view.mv)))?;
         let parts = view.parts()?;
         let frame = context

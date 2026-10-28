@@ -28,6 +28,7 @@ const REFRESH_FILES_READ: &str = "lakesoul_ivm_refresh_files_read";
 const REFRESH_ROWS_SCANNED: &str = "lakesoul_ivm_refresh_rows_scanned";
 const MV_ROWS_WRITTEN: &str = "lakesoul_ivm_mv_rows_written";
 const MV_BYTES_WRITTEN: &str = "lakesoul_ivm_mv_bytes_written";
+const REFRESH_FULL_SCANS: &str = "lakesoul_ivm_refresh_full_scans";
 
 static DESCRIBE_METRICS: Once = Once::new();
 
@@ -96,6 +97,10 @@ fn describe_metrics() {
             MV_BYTES_WRITTEN,
             "Materialized-view bytes written by one view refresh, by view kind"
         );
+        metrics::describe_counter!(
+            REFRESH_FULL_SCANS,
+            "Full table reads performed by one view refresh, by view kind"
+        );
     });
 }
 
@@ -158,12 +163,38 @@ pub(crate) fn record_rebuild(kind: &str, duration: Duration) {
 }
 
 /// The IO one refresh consumed, attributed to its task.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub(crate) struct RefreshIo {
     files_read: u64,
     rows_scanned: u64,
     rows_written: u64,
     bytes_written: u64,
+    /// Full table reads (`current_table_frame` and direct full providers).
+    full_scans: u64,
+    /// The first few table names read in full, for diagnostics.
+    full_scan_tables: Vec<String>,
+}
+
+impl RefreshIo {
+    pub(crate) fn full_scans(&self) -> u64 {
+        self.full_scans
+    }
+
+    pub(crate) fn full_scan_tables(&self) -> &[String] {
+        &self.full_scan_tables
+    }
+
+    pub(crate) fn files_read(&self) -> u64 {
+        self.files_read
+    }
+
+    pub(crate) fn rows_scanned(&self) -> u64 {
+        self.rows_scanned
+    }
+
+    pub(crate) fn rows_written(&self) -> u64 {
+        self.rows_written
+    }
 }
 
 tokio::task_local! {
@@ -176,7 +207,7 @@ tokio::task_local! {
 ///
 /// The counters are recorded when the future completes; a read outside a
 /// refresh scope is not attributed to any view.
-pub(crate) async fn scope_refresh_io<F, T>(kind: &str, future: F) -> T
+pub(crate) async fn scope_refresh_io<F, T>(kind: &str, future: F) -> (T, RefreshIo)
 where
     F: Future<Output = T>,
 {
@@ -184,9 +215,9 @@ where
     REFRESH_IO
         .scope(io.clone(), async {
             let value = future.await;
-            let io = *io.lock().expect("refresh IO mutex");
-            record_refresh_io(kind, io);
-            value
+            let io = io.lock().expect("refresh IO mutex").clone();
+            record_refresh_io(kind, &io);
+            (value, io)
         })
         .await
 }
@@ -249,7 +280,21 @@ pub(crate) fn add_bytes_written(bytes: u64) {
     }
 }
 
-fn record_refresh_io(kind: &str, io: RefreshIo) {
+/// Record a full table read in the current refresh trace.
+pub(crate) fn note_full_scan(table: &str) {
+    if let Ok(io) = REFRESH_IO.try_with(std::sync::Arc::clone)
+        && let Ok(mut io) = io.lock()
+    {
+        io.full_scans += 1;
+        if io.full_scan_tables.len() < 8
+            && !io.full_scan_tables.iter().any(|name| name == table)
+        {
+            io.full_scan_tables.push(table.to_string());
+        }
+    }
+}
+
+fn record_refresh_io(kind: &str, io: &RefreshIo) {
     describe_metrics();
     if io.files_read > 0 {
         metrics::counter!(REFRESH_FILES_READ, "kind" => kind.to_string())
@@ -266,5 +311,9 @@ fn record_refresh_io(kind: &str, io: RefreshIo) {
     if io.bytes_written > 0 {
         metrics::counter!(MV_BYTES_WRITTEN, "kind" => kind.to_string())
             .increment(io.bytes_written);
+    }
+    if io.full_scans > 0 {
+        metrics::counter!(REFRESH_FULL_SCANS, "kind" => kind.to_string())
+            .increment(io.full_scans);
     }
 }
