@@ -898,22 +898,26 @@ impl IvmSqlExecutor {
         }
         let mut generated_state_id = None;
         let spec = if !fallback && needs_state_table(&probe) {
-            let state_table_id = self.ensure_state_table(&mv, &probe).await?;
-            generated_state_id = Some(state_table_id.clone());
-            let request = AnalyzeRequest {
-                state_table_id: Some(state_table_id),
-                ..request
-            };
-            self.analyze_with_derived(
-                &plan,
-                &mut tables,
-                &request,
-                &mv,
-                &mut derived,
-                &mut derived_cache,
-            )
-            .await?
-            .0
+            match self.ensure_state_table(&mv, &probe).await? {
+                Some(state_table_id) => {
+                    generated_state_id = Some(state_table_id.clone());
+                    let request = AnalyzeRequest {
+                        state_table_id: Some(state_table_id),
+                        ..request
+                    };
+                    self.analyze_with_derived(
+                        &plan,
+                        &mut tables,
+                        &request,
+                        &mv,
+                        &mut derived,
+                        &mut derived_cache,
+                    )
+                    .await?
+                    .0
+                }
+                None => probe,
+            }
         } else {
             probe
         };
@@ -1178,9 +1182,10 @@ impl IvmSqlExecutor {
             .ensure_internal_state_table(target, &state_spec, expected.clone())
             .await?;
         state_spec.set_derived_identity(&state_table.table_id, &state_table.table_id)?;
-        if needs_state_table(&state_spec) {
-            let state_table_id =
-                self.ensure_state_table(&state_table, &state_spec).await?;
+        if needs_state_table(&state_spec)
+            && let Some(state_table_id) =
+                self.ensure_state_table(&state_table, &state_spec).await?
+        {
             state_spec.set_derived_state_table(&state_table_id)?;
         }
         let state_definition = definition_hash(&state_spec)?;
@@ -1565,8 +1570,9 @@ impl IvmSqlExecutor {
         spec.set_derived_identity(&view_id, &view_id)?;
         // A `MIN`/`MAX` or `DISTINCT` aggregate step carries its own
         // value-count state table, created next to the step MV.
-        if needs_state_table(&spec) {
-            let state_table_id = self.ensure_state_table(&table, &spec).await?;
+        if needs_state_table(&spec)
+            && let Some(state_table_id) = self.ensure_state_table(&table, &spec).await?
+        {
             spec.set_derived_state_table(&state_table_id)?;
         }
         let definition = definition_hash(&spec)?;
@@ -1959,7 +1965,11 @@ impl IvmSqlExecutor {
 
     /// The value-count state table of the view, reusing the registered one when
     /// its schema still matches and recreating it otherwise.
-    async fn ensure_state_table(&self, mv: &IvmTable, spec: &ViewSpec) -> Result<String> {
+    async fn ensure_state_table(
+        &self,
+        mv: &IvmTable,
+        spec: &ViewSpec,
+    ) -> Result<Option<String>> {
         if matches!(spec, ViewSpec::Join { .. } | ViewSpec::LookupJoin { .. }) {
             let schema = mv.schema.clone();
             let primary_keys = mv.primary_keys.clone();
@@ -1984,7 +1994,7 @@ impl IvmSqlExecutor {
                 if schema_matches(&table.schema, &schema)
                     && table.primary_keys == primary_keys
                 {
-                    return Ok(table.table_id);
+                    return Ok(Some(table.table_id));
                 }
                 self.runtime
                     .metadata()
@@ -2011,12 +2021,13 @@ impl IvmSqlExecutor {
             }
             options.hash_bucket_num = mv.hash_bucket_num.clone();
             let table = create_ivm_table(self.runtime.client(), options).await?;
-            return Ok(table.table_id);
+            return Ok(Some(table.table_id));
         }
         if !multi_agg_value_state_eligible(spec)
             && let ViewSpec::MultiAgg {
                 source_table_id,
                 group_keys,
+                group_exprs,
                 ..
             } = spec
         {
@@ -2026,7 +2037,19 @@ impl IvmSqlExecutor {
                     "multi-agg row state needs a keyed source"
                 ));
             }
-            let schema = multi_agg_rows_state_schema_for(&source.schema, group_keys)?;
+            if group_exprs.iter().zip(group_keys).any(|(expr, key)| {
+                !expr.is_empty()
+                    && expr != key
+                    && source.schema.field_with_name(key).is_ok()
+            }) {
+                tracing::debug!(
+                    table = %source.table_name,
+                    "multi-agg group expression reuses a source column; using full recompute"
+                );
+                return Ok(None);
+            }
+            let schema =
+                multi_agg_rows_state_schema_for(&source.schema, group_keys, group_exprs)?;
             let mut primary_keys = group_keys.clone();
             for key in &source.primary_keys {
                 if !primary_keys.contains(key) {
@@ -2045,7 +2068,7 @@ impl IvmSqlExecutor {
                 if schema_matches(&table.schema, &schema)
                     && table.primary_keys == primary_keys
                 {
-                    return Ok(table.table_id);
+                    return Ok(Some(table.table_id));
                 }
                 self.runtime
                     .metadata()
@@ -2097,7 +2120,7 @@ impl IvmSqlExecutor {
                 .metadata()
                 .register_state(spec.view_id(), StateRole::MultiAggRows, &table)
                 .await?;
-            return Ok(table.table_id);
+            return Ok(Some(table.table_id));
         }
         if let ViewSpec::MultiAgg {
             source_table_id,
@@ -2126,7 +2149,7 @@ impl IvmSqlExecutor {
             {
                 let table = self.runtime.open_table_by_id(&existing.table_id).await?;
                 if schema_matches(&table.schema, &schema) {
-                    return Ok(table.table_id);
+                    return Ok(Some(table.table_id));
                 }
                 self.runtime
                     .metadata()
@@ -2153,7 +2176,7 @@ impl IvmSqlExecutor {
             }
             options.hash_bucket_num = mv.hash_bucket_num.clone();
             let table = create_ivm_table(self.runtime.client(), options).await?;
-            return Ok(table.table_id);
+            return Ok(Some(table.table_id));
         }
         let (source_table_id, group_keys, group_exprs, value_column, value_expr) =
             match spec {
@@ -2208,7 +2231,7 @@ impl IvmSqlExecutor {
         {
             let table = self.runtime.open_table_by_id(&existing.table_id).await?;
             if schema_matches(&table.schema, &schema) {
-                return Ok(table.table_id);
+                return Ok(Some(table.table_id));
             }
             self.runtime
                 .metadata()
@@ -2237,7 +2260,7 @@ impl IvmSqlExecutor {
             options = options.with_range_partition_columns(range_partitions);
         }
         let table = create_ivm_table(self.runtime.client(), options).await?;
-        Ok(table.table_id)
+        Ok(Some(table.table_id))
     }
 
     /// Drop the generated state tables of a view (the MV is recycled by the
@@ -2413,10 +2436,9 @@ fn needs_state_table(spec: &ViewSpec) -> bool {
         ViewSpec::MinMax { .. } | ViewSpec::DistinctAgg { .. } => true,
         ViewSpec::MultiAgg {
             group_keys,
-            group_exprs,
             having_lookup,
             ..
-        } => group_exprs.is_empty() && !group_keys.is_empty() && having_lookup.is_none(),
+        } => !group_keys.is_empty() && having_lookup.is_none(),
         _ => false,
     }
 }

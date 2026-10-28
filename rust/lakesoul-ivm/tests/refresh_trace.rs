@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use arrow_array::{Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use lakesoul_ivm::{
-    IvmRuntime, IvmSqlExecutor, IvmTable, IvmTableOptions, semi_anti_mv_schema_for,
+    IvmRuntime, IvmSqlExecutor, IvmTableOptions, semi_anti_mv_schema_for,
 };
 use tempfile::tempdir;
 

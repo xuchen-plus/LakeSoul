@@ -922,6 +922,295 @@ async fn full_multi_agg(
     rows
 }
 
+/// A multi-aggregate with a computed group key: the row state materializes
+/// the expression column and keeps the source partition column as its prefix.
+#[test_log::test(tokio::test)]
+async fn multi_agg_computed_group_key_uses_row_state() {
+    let runtime = IvmRuntime::from_env().await.unwrap();
+    runtime.init_schema().await.unwrap();
+    let dir = tempdir().unwrap();
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let source = create_source(&runtime, &dir, &suffix).await;
+    let group_keys = vec!["day".to_string(), "grp".to_string()];
+    let group_exprs = vec!["day".to_string(), "g".to_string()];
+    let mv = runtime
+        .create_table(
+            IvmTableOptions::new(
+                format!("ivm_part_gexpr_mv_{suffix}"),
+                table_path(&dir, "mv"),
+                multi_agg_mv_schema_for(
+                    &source.schema,
+                    &group_keys,
+                    &group_exprs,
+                    &[
+                        ("cnt".to_string(), DataType::Int64),
+                        ("mx".to_string(), DataType::Int64),
+                    ],
+                )
+                .unwrap(),
+            )
+            .with_primary_keys(group_keys.clone())
+            .with_range_partition_columns(vec!["day".to_string()]),
+        )
+        .await
+        .unwrap();
+    source
+        .append_batch(
+            runtime.client(),
+            source_batch(&[
+                (1, "a", 10, "d1", "insert"),
+                (2, "b", 20, "d1", "insert"),
+                (3, "a", 7, "d2", "insert"),
+            ]),
+        )
+        .await
+        .unwrap();
+    let executor = IvmSqlExecutor::new(runtime);
+    let statement = format!(
+        "INSERT INTO ivm_part_gexpr_mv_{suffix}          SELECT day, upper(g) AS grp, COUNT(*) AS cnt, MAX(v) AS mx          FROM ivm_part_src_{suffix} GROUP BY day, upper(g)"
+    );
+    let execution = executor.execute(&statement).await.unwrap();
+    assert_eq!(execution.action.label(), "bootstrap");
+    let runtime = executor.runtime();
+    assert_eq!(
+        read_day_grp(runtime, &mv).await,
+        full_day_grp(runtime, &source).await
+    );
+
+    // The state exists, carries the computed key column and is partitioned.
+    let mut row_state = None;
+    for view in runtime.metadata().list_views().await.unwrap() {
+        for state in runtime.metadata().list_states(&view.view_id).await.unwrap() {
+            if state.role == StateRole::MultiAggRows
+                && state.table_name.starts_with(&mv.table_name)
+            {
+                row_state = Some(state);
+            }
+        }
+    }
+    let row_state = row_state.expect("the computed-key row state exists");
+    let row_state = runtime.open_table_by_id(&row_state.table_id).await.unwrap();
+    assert!(row_state.schema.field_with_name("grp").is_ok());
+    assert_eq!(row_state.range_partition_columns, vec!["day".to_string()]);
+
+    source
+        .append_batch(
+            runtime.client(),
+            source_batch(&[
+                (1, "a", 12, "d1", "insert"),
+                (2, "b", 20, "d1", "delete"),
+                (4, "c", 4, "d2", "insert"),
+            ]),
+        )
+        .await
+        .unwrap();
+    let execution = executor.execute(&statement).await.unwrap();
+    assert_eq!(execution.action.label(), "incremental");
+    assert_eq!(
+        read_day_grp(executor.runtime(), &mv).await,
+        full_day_grp(executor.runtime(), &source).await
+    );
+}
+
+async fn read_day_grp(
+    runtime: &IvmRuntime,
+    mv: &IvmTable,
+) -> Vec<(String, String, i64, i64)> {
+    let context = SessionContext::new();
+    context
+        .register_table("mv", Arc::new(runtime.table_provider(mv)))
+        .unwrap();
+    let batches = context
+        .sql("select day, grp, cnt, mx from mv order by day, grp")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    collect_day_grp(&batches)
+}
+
+async fn full_day_grp(
+    runtime: &IvmRuntime,
+    source: &IvmTable,
+) -> Vec<(String, String, i64, i64)> {
+    let context = SessionContext::new();
+    let table: Arc<dyn datafusion::catalog::TableProvider> = Arc::new(
+        datafusion::datasource::memory::MemTable::try_new(
+            source.schema.clone(),
+            vec![source.read_current(runtime.client()).await.unwrap()],
+        )
+        .unwrap(),
+    );
+    context.register_table("src", table).unwrap();
+    let batches = context
+        .sql(&format!(
+            "select day, upper(g) as grp, count(*) as cnt, max(v) as mx from src              where \"{CHANGE_COLUMN}\" <> 'delete' group by day, upper(g) order by day, grp"
+        ))
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    collect_day_grp(&batches)
+}
+
+fn collect_day_grp(batches: &[RecordBatch]) -> Vec<(String, String, i64, i64)> {
+    let mut rows = Vec::new();
+    for batch in batches {
+        let days = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let groups = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let counts = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let maxima = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            rows.push((
+                days.value(row).to_string(),
+                groups.value(row).to_string(),
+                counts.value(row),
+                maxima.value(row),
+            ));
+        }
+    }
+    rows
+}
+
+/// A computed group key that reuses a source column name cannot be stored
+/// next to the original column; the view must fall back to the full recompute
+/// instead of failing or overwriting the source value.
+#[test_log::test(tokio::test)]
+async fn multi_agg_colliding_group_key_falls_back() {
+    let runtime = IvmRuntime::from_env().await.unwrap();
+    runtime.init_schema().await.unwrap();
+    let dir = tempdir().unwrap();
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let source = create_source(&runtime, &dir, &suffix).await;
+    let mut schema = multi_agg_mv_schema_for(
+        &source.schema,
+        &["g".to_string()],
+        &["upper(g)".to_string()],
+        &[
+            ("cnt".to_string(), DataType::Int64),
+            ("mx".to_string(), DataType::Int64),
+        ],
+    )
+    .unwrap();
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.name() == "g" {
+                Arc::new(field.as_ref().clone().with_nullable(false))
+            } else {
+                field.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    schema = Arc::new(Schema::new(fields));
+    let mv = runtime
+        .create_table(
+            IvmTableOptions::new(
+                format!("ivm_part_collision_mv_{suffix}"),
+                table_path(&dir, "mv"),
+                schema,
+            )
+            .with_primary_keys(vec!["g".to_string()]),
+        )
+        .await
+        .unwrap();
+    source
+        .append_batch(
+            runtime.client(),
+            source_batch(&[
+                (1, "a", 10, "d1", "insert"),
+                (2, "A", 20, "d2", "insert"),
+                (3, "b", 7, "d1", "insert"),
+            ]),
+        )
+        .await
+        .unwrap();
+    let executor = IvmSqlExecutor::new(runtime);
+    let statement = format!(
+        "INSERT INTO ivm_part_collision_mv_{suffix}          SELECT upper(g) AS g, COUNT(*) AS cnt, MAX(v) AS mx          FROM ivm_part_src_{suffix} GROUP BY upper(g)"
+    );
+    let execution = executor.execute(&statement).await.unwrap();
+    assert_eq!(execution.action.label(), "bootstrap");
+    let runtime = executor.runtime();
+    // The colliding key cannot use the row state; the view recomputes.
+    let has_rows_state = runtime
+        .metadata()
+        .list_states(&execution.view_id)
+        .await
+        .unwrap()
+        .iter()
+        .any(|state| state.role == StateRole::MultiAggRows);
+    assert!(!has_rows_state);
+    source
+        .append_batch(
+            runtime.client(),
+            source_batch(&[(1, "a", 12, "d1", "insert")]),
+        )
+        .await
+        .unwrap();
+    let execution = executor.execute(&statement).await.unwrap();
+    assert_eq!(execution.action.label(), "incremental");
+    let context = SessionContext::new();
+    context
+        .register_table("mv", Arc::new(runtime.table_provider(&mv)))
+        .unwrap();
+    let rows = context
+        .sql("select g, cnt, mx from mv order by g")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let mut values = Vec::new();
+    for batch in &rows {
+        let groups = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let counts = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let maxima = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            values.push((
+                groups.value(row).to_string(),
+                counts.value(row),
+                maxima.value(row),
+            ));
+        }
+    }
+    assert_eq!(
+        values,
+        vec![("A".to_string(), 2, 20), ("B".to_string(), 1, 7),]
+    );
+}
+
 /// A source whose primary key contains the partition column: the injected
 /// value is part of the merge key, so an upsert in a partition replaces the
 /// stored row instead of duplicating it.

@@ -60,10 +60,9 @@ pub fn multi_agg_state_schema_for(
 pub fn multi_agg_rows_state_schema_for(
     source_schema: &Schema,
     group_keys: &[String],
+    group_exprs: &[String],
 ) -> Result<SchemaRef> {
-    for key in group_keys {
-        source_schema.field_with_name(key)?;
-    }
+    let key_fields = super::group_key_fields(source_schema, group_keys, group_exprs)?;
     let mut fields = source_schema
         .fields()
         .iter()
@@ -75,6 +74,32 @@ pub fn multi_agg_rows_state_schema_for(
             ))
         })
         .collect::<Vec<_>>();
+    for (key, key_field) in group_keys.iter().zip(&key_fields) {
+        match source_schema.field_with_name(key) {
+            Ok(existing) => {
+                if existing.data_type() != key_field.data_type() {
+                    return Err(report!(
+                        "computed group key {key} has a different type than the source column"
+                    ));
+                }
+                let computed = group_exprs
+                    .iter()
+                    .zip(group_keys)
+                    .find(|(_, name)| *name == key)
+                    .is_some_and(|(expr, _)| !expr.is_empty() && expr != key);
+                if computed {
+                    return Err(report!(
+                        "computed group key {key} would overwrite a source column"
+                    ));
+                }
+            }
+            Err(_) => fields.push(Arc::new(Field::new(
+                key,
+                key_field.data_type().clone(),
+                key_field.is_nullable(),
+            ))),
+        }
+    }
     if source_schema.field_with_name(IVM_ROW_KINDS_COLUMN).is_err() {
         fields.push(Arc::new(Field::new(
             IVM_ROW_KINDS_COLUMN,
@@ -4138,6 +4163,14 @@ impl IvmRuntime {
             .iter()
             .map(|field| field.name().clone())
             .collect::<Vec<_>>();
+        // A computed group key may not be a source column; the state stores
+        // it next to the source row so the PK prefix can address the group.
+        let mut state_fields = source_fields.clone();
+        for key in &view.group_keys {
+            if !state_fields.contains(key) {
+                state_fields.push(key.clone());
+            }
+        }
         let pk_exprs = view
             .source
             .primary_keys
@@ -4163,8 +4196,29 @@ impl IvmRuntime {
             filter_deletes(before, change_column(&view.source))?
         };
         let delta_clean = filter_deletes(delta.clone(), change_column(&view.source))?;
-        let before_data = project_frame(before.clone(), &source_fields)?;
-        let delta_data = project_frame(delta_clean, &source_fields)?;
+        let before_keys = project_group_keys_frame(
+            &context,
+            before.clone(),
+            &view.source.schema,
+            &view.group_keys,
+            &view.group_exprs,
+        )?;
+        let delta_keys = project_group_keys_frame(
+            &context,
+            delta.clone(),
+            &view.source.schema,
+            &view.group_keys,
+            &view.group_exprs,
+        )?;
+        let delta_clean_keys = project_group_keys_frame(
+            &context,
+            delta_clean,
+            &view.source.schema,
+            &view.group_keys,
+            &view.group_exprs,
+        )?;
+        let before_data = project_frame(before_keys.clone(), &state_fields)?;
+        let delta_data = project_frame(delta_clean_keys, &state_fields)?;
         let before_ops = before_data
             .with_column(IVM_ROW_KINDS_COLUMN, lit("delete"))?
             .with_column(IVM_EPOCH_COLUMN, lit(epoch))?;
@@ -4183,10 +4237,10 @@ impl IvmRuntime {
             .append_stream(&self.client, state_ops.execute_stream().await?)
             .await?;
 
-        context.register_table("old", before.clone().into_view())?;
-        context.register_table("delta", delta.clone().into_view())?;
-        let before_groups = project_frame(before, &view.group_keys)?.distinct()?;
-        let delta_groups = project_frame(delta, &view.group_keys)?.distinct()?;
+        context.register_table("old", before_keys.clone().into_view())?;
+        context.register_table("delta", delta_keys.clone().into_view())?;
+        let before_groups = project_frame(before_keys, &view.group_keys)?.distinct()?;
+        let delta_groups = project_frame(delta_keys, &view.group_keys)?.distinct()?;
         let affected = before_groups.union(delta_groups)?.distinct()?;
         // A state/MV keyed by the group keys can only hold rows of the
         // partitions the affected groups belong to.  The window's changed
@@ -4226,7 +4280,7 @@ impl IvmRuntime {
                 .await?
             }
         };
-        let src = project_frame(state_rows, &source_fields)?;
+        let src = project_frame(state_rows, &state_fields)?;
         context.register_table("src", src.into_view())?;
         crate::observability::note_full_scan(&view.mv.table_name);
         context.register_table("mv", Arc::new(self.table_provider(&view.mv)))?;
