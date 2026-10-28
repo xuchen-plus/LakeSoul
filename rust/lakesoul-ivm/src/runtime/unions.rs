@@ -765,8 +765,12 @@ impl IvmRuntime {
         let mut windows = Vec::new();
         for source in &view.sources {
             windows.push(
-                self.collect_source_window(&view.view_id, &source.table)
-                    .await?,
+                self.collect_source_window_for_filter(
+                    &view.view_id,
+                    &source.table,
+                    source.filter.as_deref(),
+                )
+                .await?,
             );
         }
         if windows.iter().all(|window| window.added_files.is_empty()) {
@@ -1111,8 +1115,12 @@ impl IvmRuntime {
         let mut windows = Vec::new();
         for source in &view.sources {
             windows.push(
-                self.collect_source_window(&view.view_id, &source.table)
-                    .await?,
+                self.collect_source_window_for_filter(
+                    &view.view_id,
+                    &source.table,
+                    source.filter.as_deref(),
+                )
+                .await?,
             );
         }
         if windows.iter().all(|window| window.added_files.is_empty()) {

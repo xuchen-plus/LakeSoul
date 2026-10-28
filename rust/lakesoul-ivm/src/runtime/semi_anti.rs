@@ -820,10 +820,18 @@ impl IvmRuntime {
         validate_semi_anti_view(view)?;
 
         let left_window = self
-            .collect_source_window(&view.view_id, &view.left)
+            .collect_source_window_for_filter(
+                &view.view_id,
+                &view.left,
+                view.left_filter.as_deref(),
+            )
             .await?;
         let right_window = self
-            .collect_source_window(&view.view_id, &view.right)
+            .collect_source_window_for_filter(
+                &view.view_id,
+                &view.right,
+                view.right_filter.as_deref(),
+            )
             .await?;
         if left_window.added_files.is_empty() && right_window.added_files.is_empty() {
             return Ok(None);
@@ -2086,10 +2094,18 @@ impl IvmRuntime {
         validate_left_aggregate_view(view)?;
 
         let left_window = self
-            .collect_source_window(&view.view_id, &view.left)
+            .collect_source_window_for_filter(
+                &view.view_id,
+                &view.left,
+                view.left_filter.as_deref(),
+            )
             .await?;
         let right_window = self
-            .collect_source_window(&view.view_id, &view.right)
+            .collect_source_window_for_filter(
+                &view.view_id,
+                &view.right,
+                view.right_filter.as_deref(),
+            )
             .await?;
         let right_changed = !right_window.added_files.is_empty();
         if left_window.added_files.is_empty() && !right_changed {
