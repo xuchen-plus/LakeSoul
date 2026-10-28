@@ -6704,11 +6704,31 @@ impl IvmRuntime {
                 &view.key_exprs.right,
                 &view.join_keys,
             )?;
+            // A plain right key may have a different name from the left key
+            // (ON l.jk = r.rk).  The contribution is keyed by the left names,
+            // so alias the plain columns; computed keys already carry them.
+            let right_join_names = if view.right_keys.is_empty() {
+                &view.join_keys
+            } else {
+                &view.right_keys
+            };
             let contribution = right_for_keys
                 .select(
                     view.join_keys
                         .iter()
-                        .map(|key| col(key.as_str()))
+                        .enumerate()
+                        .map(|(index, key)| {
+                            let computed = view
+                                .key_exprs
+                                .right
+                                .get(index)
+                                .is_some_and(|expr| !expr.is_empty());
+                            if computed {
+                                col(key.as_str())
+                            } else {
+                                col(right_join_names[index].as_str()).alias(key.as_str())
+                            }
+                        })
                         .collect::<Vec<_>>(),
                 )?
                 .distinct()?;
