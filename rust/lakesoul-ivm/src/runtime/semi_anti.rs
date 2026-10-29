@@ -1160,6 +1160,7 @@ impl IvmRuntime {
                         &probe,
                         left_state.as_ref(),
                         changed_tuples,
+                        false,
                     )
                     .await?,
                 )
@@ -1186,6 +1187,7 @@ impl IvmRuntime {
                         &probe,
                         left_state.as_ref(),
                         changed_keys,
+                        false,
                     )
                     .await?,
                 )

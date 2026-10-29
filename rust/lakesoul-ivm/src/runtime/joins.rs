@@ -3775,6 +3775,164 @@ impl IvmRuntime {
         Err(report!("right join state lookup is unavailable"))
     }
 
+    /// Decide whether a source lookup should use a streaming hash join.
+    ///
+    /// Outer/mark lookups need unmatched contribution rows and null-safe
+    /// joins need NULL keys to match; both keep the keyed lookup path.  The
+    /// inner-join case only needs matched source rows, so a hash join is a
+    /// safe replacement when the key set is large enough.
+    async fn hash_join_source_applies(
+        &self,
+        contribution: &DataFrame,
+        table: &IvmTable,
+        groups_by_bucket: &[Vec<super::PartitionFiles>],
+        bucket_count: usize,
+        input_columns: &[String],
+        multi_match: bool,
+    ) -> Result<bool> {
+        if !multi_match {
+            return Ok(false);
+        }
+        let mode = std::env::var("LAKESOUL_IVM_HASH_JOIN").unwrap_or_default();
+        if matches!(mode.as_str(), "off" | "0" | "false") {
+            return Ok(false);
+        }
+        if table.table_name.contains("__ivm_topk_state")
+            || table.table_name.contains("__ivm_topk_rank_table")
+        {
+            return Ok(false);
+        }
+        if matches!(mode.as_str(), "on" | "1" | "true") {
+            return Ok(true);
+        }
+        if groups_by_bucket
+            .iter()
+            .all(|groups| groups.iter().all(|group| group.files.is_empty()))
+        {
+            return Ok(false);
+        }
+        let key_columns = input_columns
+            .iter()
+            .map(|column| column_expr(column))
+            .collect::<Vec<_>>();
+        let keys = contribution.clone().select(key_columns)?;
+        let batches = keys.collect().await?;
+        let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        if rows < 32_000 {
+            return Ok(false);
+        }
+        // NULL keys make SQL equality and NULL-safe equality differ.  The
+        // keyed lookup preserves the view's null handling, so fall back.
+        if batches
+            .iter()
+            .any(|batch| batch.columns().iter().any(|column| column.null_count() > 0))
+        {
+            return Ok(false);
+        }
+        let Some(bytes) =
+            groups_by_bucket
+                .iter()
+                .flatten()
+                .try_fold(0u64, |total, group| {
+                    group.files.iter().try_fold(total, |total, file| {
+                        let path = file.strip_prefix("file://")?;
+                        Some(total + std::fs::metadata(path).ok()?.len())
+                    })
+                })
+        else {
+            return Ok(rows >= 100_000);
+        };
+        let parallel = bucket_count
+            .min(super::keyed_plan::max_active_tasks())
+            .max(1) as f64;
+        let key_ms = rows as f64 * 0.177 / parallel;
+        let join_ms = bytes as f64 / 1_000_000.0 / 180.0 * 1000.0 + 500.0;
+        let applies = key_ms > join_ms * 1.5;
+        tracing::debug!(
+            table = %table.table_name,
+            rows,
+            parallel,
+            state_mb = bytes as f64 / 1_000_000.0,
+            key_ms,
+            join_ms,
+            applies,
+            "hash join source lookup decision"
+        );
+        Ok(applies)
+    }
+
+    /// Decide whether a side-state lookup should use a streaming hash join.
+    ///
+    /// The key lookup does one Vortex random read per distinct key; the hash
+    /// join scans the state once.  `LAKESOUL_IVM_HASH_JOIN=on|off` overrides
+    /// the estimate.  The constants are calibrated on the 10M pilot: a key
+    /// lookup costs about 0.177ms of wall time per key (before dividing by
+    /// the bucket parallelism), and a hash join scans state at about
+    /// 180MB/s plus a 0.5s hash build.
+    async fn hash_join_state_applies(
+        &self,
+        contribution: &DataFrame,
+        state: &IvmTable,
+        groups_by_bucket: &[Vec<super::PartitionFiles>],
+        bucket_count: usize,
+    ) -> Result<bool> {
+        let mode = std::env::var("LAKESOUL_IVM_HASH_JOIN").unwrap_or_default();
+        if matches!(mode.as_str(), "off" | "0" | "false") {
+            return Ok(false);
+        }
+        // Top-k rank state is probed many times per refresh with a small key
+        // set.  A full-state hash join per probe is much more expensive than
+        // the keyed lookup, so keep that path on the lookup plan.
+        if state.table_name.contains("__ivm_topk_state")
+            || state.table_name.contains("__ivm_topk_rank_table")
+        {
+            return Ok(false);
+        }
+        if matches!(mode.as_str(), "on" | "1" | "true") {
+            return Ok(true);
+        }
+        if groups_by_bucket
+            .iter()
+            .all(|groups| groups.iter().all(|group| group.files.is_empty()))
+        {
+            return Ok(false);
+        }
+        let rows = super::count_frame_rows(contribution.clone()).await? as f64;
+        if rows < 32_000.0 {
+            return Ok(false);
+        }
+        let Some(bytes) =
+            groups_by_bucket
+                .iter()
+                .flatten()
+                .try_fold(0u64, |total, group| {
+                    group.files.iter().try_fold(total, |total, file| {
+                        let path = file.strip_prefix("file://")?;
+                        Some(total + std::fs::metadata(path).ok()?.len())
+                    })
+                })
+        else {
+            return Ok(rows >= 100_000.0);
+        };
+        let parallel = bucket_count
+            .min(super::keyed_plan::max_active_tasks())
+            .max(1) as f64;
+        let key_ms = rows * 0.177 / parallel;
+        let join_ms = bytes as f64 / 1_000_000.0 / 180.0 * 1000.0 + 500.0;
+        let applies = key_ms > join_ms * 1.5;
+        tracing::debug!(
+            table = %state.table_name,
+            rows,
+            parallel,
+            state_mb = bytes as f64 / 1_000_000.0,
+            key_ms,
+            join_ms,
+            applies,
+            "hash join state lookup decision"
+        );
+        Ok(applies)
+    }
+
     /// Read left side-state rows for an already-projected join-key
     /// contribution.  Returns `None` when no side state exists (the source is
     /// then the keyed table).
@@ -3784,6 +3942,7 @@ impl IvmRuntime {
         view: &JoinView,
         left_state: Option<&IvmTable>,
         contribution: DataFrame,
+        allow_hash_join: bool,
     ) -> Result<Option<DataFrame>> {
         use super::keyed_plan::{
             IVM_STATE_COLUMN_PREFIX, IvmLookupTable, groups_by_bucket,
@@ -3822,6 +3981,44 @@ impl IvmRuntime {
             None => left_state.current_groups(&self.client).await?,
         };
         let groups = groups_by_bucket(groups, bucket_count);
+        if allow_hash_join
+            && left_state.range_partition_columns.is_empty()
+            && self
+                .hash_join_state_applies(&contribution, left_state, &groups, bucket_count)
+                .await?
+        {
+            match super::keyed_plan::hash_join_binary_state(
+                context,
+                left_state,
+                &self.client,
+                contribution.clone(),
+                super::join_state::IVM_JOIN_KEY_COLUMN,
+                groups.clone(),
+            )
+            .await
+            {
+                Ok(frame) => {
+                    let projections = view
+                        .left
+                        .schema
+                        .fields()
+                        .iter()
+                        .map(|field| column_expr(field.name()))
+                        .collect::<Vec<_>>();
+                    return Ok(Some(filter_deletes(
+                        frame.select(projections)?,
+                        change_column(&view.left),
+                    )?));
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        table = %left_state.table_name,
+                        %error,
+                        "hash join state lookup failed; falling back to key lookup"
+                    );
+                }
+            }
+        }
         let provider = IvmLookupTable::binary(
             contribution,
             left_state.clone(),
@@ -3861,6 +4058,7 @@ impl IvmRuntime {
         view: &JoinView,
         left_state: Option<&IvmTable>,
         contribution: DataFrame,
+        allow_hash_join: bool,
     ) -> Result<DataFrame> {
         if let Some(frame) = self
             .lookup_join_left_state_by_keys(
@@ -3868,6 +4066,7 @@ impl IvmRuntime {
                 view,
                 left_state,
                 contribution.clone(),
+                allow_hash_join,
             )
             .await?
         {
@@ -3996,7 +4195,7 @@ impl IvmRuntime {
                 )
                 .await?;
             let left = match self
-                .lookup_left_rows_for_keys(context, view, left_state, contribution)
+                .lookup_left_rows_for_keys(context, view, left_state, contribution, true)
                 .await
             {
                 Ok(frame) => frame,
@@ -4416,29 +4615,77 @@ impl IvmRuntime {
             None => table.current_groups(&self.client).await?,
         };
         let groups = groups_by_bucket(groups, bucket_count);
-        let provider = IvmLookupTable::columns(
-            routed,
-            table.clone(),
-            groups,
-            input_columns.to_vec(),
-            table_columns.to_vec(),
-            bucket_count,
-            route_columns,
-            multi_match,
-        );
-        let provider = if materialized || partitions.is_some() {
-            provider.with_prepruned_groups()
+        // Large key sets are cheaper as one streaming hash join than as one
+        // random PK lookup per key.  The join rebuilds its physical plan on
+        // every scan, so the same logical lookup can be executed repeatedly.
+        let hash_join_frame = if self
+            .hash_join_source_applies(
+                &routed,
+                table,
+                &groups,
+                bucket_count,
+                input_columns,
+                multi_match,
+            )
+            .await?
+        {
+            match super::keyed_plan::hash_join_source_state(
+                context,
+                table,
+                &self.client,
+                routed.clone(),
+                input_columns,
+                table_columns,
+                route_columns.clone(),
+                multi_match,
+                groups.clone(),
+            )
+            .await
+            {
+                Ok(frame) => Some(frame),
+                Err(error) => {
+                    tracing::warn!(
+                        table = %table.table_name,
+                        %error,
+                        "hash join source lookup failed; falling back to key lookup"
+                    );
+                    None
+                }
+            }
         } else {
-            provider
+            None
         };
-        let frame = context.read_table(Arc::new(provider))?;
+        let (frame, prefixed) = if let Some(frame) = hash_join_frame {
+            (frame, false)
+        } else {
+            let provider = IvmLookupTable::columns(
+                routed,
+                table.clone(),
+                groups,
+                input_columns.to_vec(),
+                table_columns.to_vec(),
+                bucket_count,
+                route_columns,
+                multi_match,
+            );
+            let provider = if materialized || partitions.is_some() {
+                provider.with_prepruned_groups()
+            } else {
+                provider
+            };
+            (context.read_table(Arc::new(provider))?, true)
+        };
         let projections = table
             .schema
             .fields()
             .iter()
             .map(|field| {
-                column_expr(&format!("{IVM_STATE_COLUMN_PREFIX}{}", field.name()))
-                    .alias(field.name())
+                if prefixed {
+                    column_expr(&format!("{IVM_STATE_COLUMN_PREFIX}{}", field.name()))
+                        .alias(field.name())
+                } else {
+                    column_expr(field.name())
+                }
             })
             .collect::<Vec<_>>();
         let mut frame = frame.select(projections)?;
@@ -5699,6 +5946,7 @@ impl IvmRuntime {
                     &probe,
                     left_state.as_ref(),
                     changed_keys,
+                    true,
                 )
                 .await?;
             match &delta_left {
@@ -6053,6 +6301,7 @@ impl IvmRuntime {
                     &probe,
                     left_state.as_ref(),
                     changed_keys,
+                    true,
                 )
                 .await?
             } else {
@@ -7469,6 +7718,7 @@ impl IvmRuntime {
                     &probe,
                     left_state.as_ref(),
                     contribution,
+                    false,
                 )
                 .await?;
             let left_for_right = apply_side_filter(
