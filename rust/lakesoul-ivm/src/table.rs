@@ -16,6 +16,7 @@
 //! the join key while merging on the full row identity.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow::compute::concat_batches;
 use arrow::record_batch::RecordBatch;
@@ -839,9 +840,13 @@ impl IvmTable {
             }
             let batch = self.cast_batch(batch)?;
             rows += batch.num_rows() as u64;
+            let started = Instant::now();
             writer.write_record_batch(batch).await?;
+            crate::observability::add_write_time(started.elapsed());
         }
+        let started = Instant::now();
         let outputs = writer.flush_and_close().await?;
+        crate::observability::add_write_time(started.elapsed());
         let files = self.output_files(outputs, rows);
         self.commit_files(client, files).await
     }
@@ -907,7 +912,9 @@ impl IvmTable {
                             |error| rootcause::report!("merge key batch: {error}"),
                         )?
                     } else {
+                        let started = Instant::now();
                         writer.write_record_batch(previous).await?;
+                        crate::observability::add_write_time(started.elapsed());
                         batch
                     }
                 }
@@ -915,16 +922,22 @@ impl IvmTable {
             };
             let last_start = last_key_group_start(&converter, &batch, &key_indices)?;
             if last_start > 0 {
+                let started = Instant::now();
                 writer
                     .write_record_batch(batch.slice(0, last_start))
                     .await?;
+                crate::observability::add_write_time(started.elapsed());
             }
             carry = Some(batch.slice(last_start, batch.num_rows() - last_start));
         }
         if let Some(carry) = carry {
+            let started = Instant::now();
             writer.write_record_batch(carry).await?;
+            crate::observability::add_write_time(started.elapsed());
         }
+        let started = Instant::now();
         let outputs = writer.flush_and_close().await?;
+        crate::observability::add_write_time(started.elapsed());
         let files = self.output_files(outputs, rows);
         self.commit_files(client, files).await
     }

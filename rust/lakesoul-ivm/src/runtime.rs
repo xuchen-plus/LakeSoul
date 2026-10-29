@@ -3133,9 +3133,13 @@ pub(crate) async fn write_dataframe(
         // table stores `Utf8`.  Every write path funnels through here, so cast
         // once instead of relying on each view kind.
         let batch = table.cast_batch(batch)?;
+        let started = std::time::Instant::now();
         writer.write_record_batch(batch).await?;
+        crate::observability::add_write_time(started.elapsed());
     }
+    let started = std::time::Instant::now();
     let outputs = writer.flush_and_close().await?;
+    crate::observability::add_write_time(started.elapsed());
     let files = table.output_files(outputs, written_rows);
     Ok(WrittenFiles {
         files,
@@ -4421,6 +4425,10 @@ impl IvmRuntime {
             files_read = io.files_read(),
             rows_scanned = io.rows_scanned(),
             rows_written = io.rows_written(),
+            lookup_ms = io.lookup_ms(),
+            lookup_calls = io.lookup_calls(),
+            write_ms = io.write_ms(),
+            write_calls = io.write_calls(),
             "view refresh finished"
         );
         result
@@ -4493,6 +4501,10 @@ impl IvmRuntime {
             files_read = io.files_read(),
             rows_scanned = io.rows_scanned(),
             rows_written = io.rows_written(),
+            lookup_ms = io.lookup_ms(),
+            lookup_calls = io.lookup_calls(),
+            write_ms = io.write_ms(),
+            write_calls = io.write_calls(),
             "view rebuild finished"
         );
         if result.is_ok() {

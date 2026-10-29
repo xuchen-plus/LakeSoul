@@ -927,6 +927,7 @@ pub(crate) struct IvmPkLookupExec {
     gate: Arc<Semaphore>,
     multi_match: bool,
     emit_unmatched: bool,
+    profile_io: Option<crate::observability::ProfileHandle>,
     properties: Arc<PlanProperties>,
 }
 
@@ -1009,8 +1010,17 @@ impl IvmPkLookupExec {
             gate: Arc::new(Semaphore::new(max_active_tasks())),
             multi_match: false,
             emit_unmatched: false,
+            profile_io: None,
             properties,
         })
+    }
+
+    pub(crate) fn with_profile(
+        mut self,
+        profile_io: Option<crate::observability::ProfileHandle>,
+    ) -> Self {
+        self.profile_io = profile_io;
+        self
     }
     /// Join-side lookup mode: emit every matching state row and drop a
     /// contribution row without a match (inner-join semantics).
@@ -1107,6 +1117,7 @@ impl ExecutionPlan for IvmPkLookupExec {
         plan.gate = self.gate.clone();
         plan.multi_match = self.multi_match;
         plan.emit_unmatched = self.emit_unmatched;
+        plan.profile_io = self.profile_io.clone();
         Ok(Arc::new(plan))
     }
 
@@ -1131,6 +1142,7 @@ impl ExecutionPlan for IvmPkLookupExec {
         let gate = self.gate.clone();
         let multi_match = self.multi_match;
         let emit_unmatched = self.emit_unmatched;
+        let profile_io = self.profile_io.clone();
         let stream =
             futures::stream::try_unfold((input, groups), move |(mut input, groups)| {
                 let gate = gate.clone();
@@ -1138,6 +1150,7 @@ impl ExecutionPlan for IvmPkLookupExec {
                 let key = key.clone();
                 let state_schema = state_schema.clone();
                 let out_schema = out_schema.clone();
+                let profile_io = profile_io.clone();
                 async move {
                     let gate = gate.clone();
                     loop {
@@ -1192,6 +1205,12 @@ impl ExecutionPlan for IvmPkLookupExec {
                             elapsed = ?started.elapsed(),
                             "keyed state lookup batch finished"
                         );
+                        if let Some(io) = &profile_io {
+                            crate::observability::add_lookup_time_shared(
+                                io,
+                                started.elapsed(),
+                            );
+                        }
                         return Ok(Some((output, (input, groups))));
                     }
                 }
@@ -1295,6 +1314,7 @@ pub(crate) struct IvmLookupTable {
     partition_columns: Vec<String>,
     /// The caller already fetched only the matching partition groups.
     prepruned: bool,
+    profile_io: Option<crate::observability::ProfileHandle>,
     schema: SchemaRef,
 }
 
@@ -1326,6 +1346,7 @@ impl IvmLookupTable {
             multi_match,
             partition_columns,
             prepruned: false,
+            profile_io: crate::observability::current_refresh_io(),
             schema,
         }
     }
@@ -1354,6 +1375,7 @@ impl IvmLookupTable {
             multi_match,
             partition_columns,
             prepruned: false,
+            profile_io: crate::observability::current_refresh_io(),
             schema,
         }
     }
@@ -1462,7 +1484,11 @@ impl IvmLookupTable {
                 self.bucket_count,
             )?,
         };
-        Ok(Arc::new(lookup.with_multi_match(self.multi_match)))
+        Ok(Arc::new(
+            lookup
+                .with_multi_match(self.multi_match)
+                .with_profile(self.profile_io.clone()),
+        ))
     }
 }
 

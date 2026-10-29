@@ -173,6 +173,14 @@ pub(crate) struct RefreshIo {
     full_scans: u64,
     /// The first few table names read in full, for diagnostics.
     full_scan_tables: Vec<String>,
+    /// Keyed lookup time and calls (sum over batches; may exceed wall time
+    /// because partitions run concurrently).
+    lookup_nanos: u64,
+    lookup_calls: u64,
+    /// Time spent inside the writer calls of this refresh (not including
+    /// pulling the input stream).
+    write_nanos: u64,
+    write_calls: u64,
 }
 
 impl RefreshIo {
@@ -195,12 +203,30 @@ impl RefreshIo {
     pub(crate) fn rows_written(&self) -> u64 {
         self.rows_written
     }
+
+    pub(crate) fn lookup_ms(&self) -> u64 {
+        self.lookup_nanos / 1_000_000
+    }
+
+    pub(crate) fn lookup_calls(&self) -> u64 {
+        self.lookup_calls
+    }
+
+    pub(crate) fn write_ms(&self) -> u64 {
+        self.write_nanos / 1_000_000
+    }
+
+    pub(crate) fn write_calls(&self) -> u64 {
+        self.write_calls
+    }
 }
+
+pub(crate) type ProfileHandle = std::sync::Arc<std::sync::Mutex<RefreshIo>>;
 
 tokio::task_local! {
     /// Shared so reader tasks started with `spawn_blocking` (whose thread
     /// does not inherit the task-local) can still attribute their IO.
-    static REFRESH_IO: std::sync::Arc<std::sync::Mutex<RefreshIo>>;
+    static REFRESH_IO: ProfileHandle;
 }
 
 /// Run one view refresh (or rebuild) with its IO counters scoped to the task.
@@ -277,6 +303,31 @@ pub(crate) fn add_bytes_written(bytes: u64) {
         && let Ok(mut io) = io.lock()
     {
         io.bytes_written += bytes;
+    }
+}
+
+/// One finished keyed lookup batch.  The elapsed value is the batch's own
+/// wall time; the sum is diagnostic and can exceed the view's wall time.
+/// The profile is captured before the plan moves into a DataFusion task,
+/// because task-locals do not follow it.
+pub(crate) fn add_lookup_time_shared(
+    io: &std::sync::Arc<std::sync::Mutex<RefreshIo>>,
+    elapsed: std::time::Duration,
+) {
+    if let Ok(mut io) = io.lock() {
+        io.lookup_nanos += elapsed.as_nanos() as u64;
+        io.lookup_calls += 1;
+    }
+}
+
+/// Time spent inside a writer call (write_record_batch / flush_and_close),
+/// not the time spent producing the input stream.
+pub(crate) fn add_write_time(elapsed: std::time::Duration) {
+    if let Ok(io) = REFRESH_IO.try_with(std::sync::Arc::clone)
+        && let Ok(mut io) = io.lock()
+    {
+        io.write_nanos += elapsed.as_nanos() as u64;
+        io.write_calls += 1;
     }
 }
 
