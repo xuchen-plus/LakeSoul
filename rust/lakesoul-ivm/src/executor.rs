@@ -25,7 +25,7 @@ use std::sync::Arc;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::TableProvider;
 use datafusion::common::ScalarValue;
-use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, SubqueryAlias};
 use datafusion::prelude::{Expr, SessionContext};
@@ -40,26 +40,28 @@ use crate::runtime::{
     ChainPolicy, IVM_AVG_COLUMN, IVM_COUNT_COLUMN, IVM_EPOCH_COLUMN,
     IVM_GROUP_ROW_COLUMN, IVM_NONNULL_COUNT_COLUMN, IVM_PAIR_IDENTITY_COLUMN,
     IVM_ROW_KINDS_COLUMN, IVM_SOURCE_COLUMN, IVM_SUM_COLUMN, IVM_VALUE_COLUMN,
-    IvmRuntime, JoinOutputColumn, JoinSide, MultiAggSpec, SinkColumn, ViewSpec,
-    approx_distinct_groups_mv_schema_for, approx_percentile_groups_mv_schema_for,
-    array_agg_groups_mv_schema_for, bool_agg_groups_mv_schema_for,
-    computed_agg_mv_schema_for, cross_join_view_schema_for, decode_data_type,
-    distinct_agg_groups_mv_schema_for, encode_data_type, full_join_view_schema_with_keys,
-    grouping_sets_mv_schema_for, join_view_schema_with_keys,
-    keyed_join_output_primary_keys, keyed_join_view_schema_with_keys,
-    left_aggregate_mv_schema_with_outputs, left_join_view_schema_with_keys,
-    lookup_chain_mv_schema_for, lookup_chain_step_id_column, lookup_join_view_schema_for,
+    IvmRuntime, JoinOutputColumn, JoinSide, MultiAggSpec, MultiLookupColumn,
+    MultiLookupRight, SinkColumn, ViewSpec, approx_distinct_groups_mv_schema_for,
+    approx_percentile_groups_mv_schema_for, array_agg_groups_mv_schema_for,
+    bool_agg_groups_mv_schema_for, computed_agg_mv_schema_for,
+    cross_join_view_schema_for, decode_data_type, distinct_agg_groups_mv_schema_for,
+    encode_data_type, full_join_view_schema_with_keys, grouping_sets_mv_schema_for,
+    join_view_schema_with_keys, keyed_join_output_primary_keys,
+    keyed_join_view_schema_with_keys, left_aggregate_mv_schema_with_outputs,
+    left_join_view_schema_with_keys, lookup_chain_mv_schema_for,
+    lookup_chain_step_id_column, lookup_join_view_schema_for,
     median_groups_mv_schema_for, min_max_groups_mv_schema_for, multi_agg_mv_schema_for,
     multi_agg_rows_state_schema_for, multi_agg_state_schema_for,
     multi_join_append_schema_for, multi_join_mv_schema_for, multi_join_primary_keys,
-    multi_window_mv_schema_for_with_payload, nullable_join_key_schema, parse_filter,
-    refresh_session, row_expr_mv_schema_for, semi_anti_mv_schema_for,
-    string_agg_groups_mv_schema_for, sum_count_groups_mv_schema_for,
-    top_k_expr_mv_schema_for, union_all_mv_schema_with_source,
-    union_distinct_mv_schema_for, union_output_schema_for,
-    value_count_groups_state_schema_for, variance_groups_mv_schema_for,
-    wide_full_join_view_schema_with_identity_and_keys, wide_join_view_schema_with_keys,
-    wide_keyed_join_view_schema_for, wide_keyed_join_view_schema_with_keys,
+    multi_lookup_join_mv_schema_for, multi_window_mv_schema_for_with_payload,
+    nullable_join_key_schema, parse_filter, refresh_session, row_expr_mv_schema_for,
+    semi_anti_mv_schema_for, string_agg_groups_mv_schema_for,
+    sum_count_groups_mv_schema_for, top_k_expr_mv_schema_for,
+    union_all_mv_schema_with_source, union_distinct_mv_schema_for,
+    union_output_schema_for, value_count_groups_state_schema_for,
+    variance_groups_mv_schema_for, wide_full_join_view_schema_with_identity_and_keys,
+    wide_join_view_schema_with_keys, wide_keyed_join_view_schema_for,
+    wide_keyed_join_view_schema_with_keys,
     wide_left_join_view_schema_with_identity_and_keys, wide_lookup_join_view_schema_for,
     wide_outer_join_view_schema_with_keys, window_columns_mv_schema_for_with_payload,
 };
@@ -157,6 +159,14 @@ struct DerivedCaches {
     derived: HashMap<String, CachedDerived>,
     multi_agg: HashMap<MultiAggKey, CachedMultiAgg>,
     rows: HashMap<String, ViewSpec>,
+    /// How often each derived view is read by the statement being analyzed.
+    /// A fused lookup owns its inner view only when that view has one reader,
+    /// so a shared step keeps its own refresh.
+    uses: HashMap<String, usize>,
+    /// Inner lookup steps replaced by a fused step.  Their tables are released
+    /// after the statement commits so they do not keep a second materialized
+    /// copy of the same rows.
+    fused_inner: Vec<String>,
 }
 
 fn multi_agg_key(spec: &ViewSpec) -> Option<MultiAggKey> {
@@ -401,6 +411,15 @@ fn widen_derived_join(spec: &mut ViewSpec) {
             name: names.1,
         },
     ];
+}
+
+/// Whether a table's primary key is exactly the lookup key set.
+fn same_key_set(primary_keys: &[String], keys: &[String]) -> bool {
+    let mut primary = primary_keys.to_vec();
+    let mut keys = keys.to_vec();
+    primary.sort();
+    keys.sort();
+    primary == keys
 }
 
 /// The source table of a row view that is a pure identity projection.  Such a
@@ -871,6 +890,27 @@ fn derived_output_mapping(
         .iter()
         .map(|field| (field.name().clone(), field.name().clone()))
         .collect())
+}
+
+/// A fused multi-right lookup and the inner view whose join-key index it
+/// adopts, so the same left rows are not indexed twice.
+struct FusedMultiLookup {
+    spec: ViewSpec,
+    inner_view_id: String,
+}
+
+/// Count the nodes a derived-source rewrite replaces.  A plan may read the
+/// same derived source twice; the fusion below only owns the inner view when
+/// it has exactly one reader.
+fn plan_occurrences(plan: &LogicalPlan, target: &LogicalPlan) -> usize {
+    let mut count = 0;
+    let _ = plan.apply(|node| {
+        if node == target {
+            count += 1;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
+    count.max(1)
 }
 
 /// Replace every occurrence of `target` in `plan` with `replacement`.
@@ -1382,6 +1422,7 @@ impl IvmSqlExecutor {
             self.drop_stale_derived(&mv, derived.len()).await?;
         }
 
+        self.release_fused_inner_views(&caches).await?;
         Ok(IvmExecution {
             action,
             epoch,
@@ -1698,6 +1739,7 @@ impl IvmSqlExecutor {
         } else {
             IvmExecutionAction::Incremental
         };
+        self.release_fused_inner_views(&caches).await?;
         Ok(IvmExecution {
             action,
             epoch: sink_epoch,
@@ -1787,6 +1829,187 @@ impl IvmSqlExecutor {
         Ok(())
     }
 
+    /// Fuse `outer LookupJoin(left = inner LookupJoin)` into one
+    /// MultiLookupJoin when both lookups use the same plain join keys and both
+    /// rights are unique by key.  The shared left index remains the only
+    /// right-change fanout path; no base scan is introduced.
+    async fn fuse_multi_lookup(
+        &self,
+        spec: &ViewSpec,
+        tables: &HashMap<String, IvmTable>,
+        deferred: &mut Vec<String>,
+        caches: &DerivedCaches,
+    ) -> Result<Option<FusedMultiLookup>> {
+        let ViewSpec::LookupJoin {
+            left_table_id,
+            right_table_id,
+            join_keys,
+            right_keys,
+            key_exprs,
+            left_filter,
+            right_filter,
+            output_columns,
+            state_table_id,
+            ..
+        } = spec
+        else {
+            return Ok(None);
+        };
+        if output_columns.is_empty()
+            || left_filter.is_some()
+            || state_table_id.is_some()
+            || key_exprs
+                .left
+                .iter()
+                .chain(&key_exprs.right)
+                .any(|expr| !expr.is_empty())
+        {
+            return Ok(None);
+        }
+        let outer_right_keys = if right_keys.is_empty() {
+            join_keys.clone()
+        } else {
+            right_keys.clone()
+        };
+        let outer_right = self.runtime.open_table_by_id(right_table_id).await?;
+        if !same_key_set(&outer_right.primary_keys, &outer_right_keys)
+            || !same_key_set(&outer_right.primary_keys, join_keys)
+        {
+            return Ok(None);
+        }
+        if caches.uses.get(left_table_id).copied() != Some(1) {
+            return Ok(None);
+        }
+        let Some(value) = self.runtime.metadata().get_view_spec(left_table_id).await?
+        else {
+            return Ok(None);
+        };
+        let inner: ViewSpec = serde_json::from_value(value)?;
+        let ViewSpec::LookupJoin {
+            left_table_id: base_id,
+            right_table_id: inner_right_id,
+            join_keys: inner_keys,
+            right_keys: inner_right_keys,
+            key_exprs: inner_key_exprs,
+            left_filter: inner_left_filter,
+            right_filter: inner_right_filter,
+            output_columns: inner_columns,
+            state_table_id: inner_state,
+            ..
+        } = inner
+        else {
+            return Ok(None);
+        };
+        if inner_keys != *join_keys
+            || inner_left_filter.is_some()
+            || inner_state.is_some()
+            || inner_columns.is_empty()
+            || inner_key_exprs
+                .left
+                .iter()
+                .chain(&inner_key_exprs.right)
+                .any(|expr| !expr.is_empty())
+        {
+            return Ok(None);
+        }
+        let inner_right_keys = if inner_right_keys.is_empty() {
+            inner_keys.clone()
+        } else {
+            inner_right_keys
+        };
+        if inner_right_keys != outer_right_keys {
+            return Ok(None);
+        }
+        let base = self.runtime.open_table_by_id(&base_id).await?;
+        let inner_right = self.runtime.open_table_by_id(&inner_right_id).await?;
+        if !same_key_set(&inner_right.primary_keys, &inner_right_keys)
+            || !same_key_set(&inner_right.primary_keys, join_keys)
+        {
+            return Ok(None);
+        }
+        let mut columns = Vec::new();
+        for key in join_keys {
+            columns.push(MultiLookupColumn {
+                source: 0,
+                column: key.clone(),
+                name: key.clone(),
+            });
+        }
+        for column in output_columns {
+            if column.side == JoinSide::Right {
+                columns.push(MultiLookupColumn {
+                    source: 2,
+                    column: column.column.clone(),
+                    name: column.name.clone(),
+                });
+                continue;
+            }
+            let Some(inner_column) = inner_columns
+                .iter()
+                .find(|candidate| candidate.name == column.column)
+            else {
+                return Ok(None);
+            };
+            columns.push(MultiLookupColumn {
+                source: if inner_column.side == JoinSide::Right {
+                    1
+                } else {
+                    0
+                },
+                column: inner_column.column.clone(),
+                name: column.name.clone(),
+            });
+        }
+        for key in &base.primary_keys {
+            if !join_keys.contains(key)
+                && !columns
+                    .iter()
+                    .any(|column| column.column == *key && column.name == *key)
+            {
+                columns.push(MultiLookupColumn {
+                    source: 0,
+                    column: key.clone(),
+                    name: key.clone(),
+                });
+            }
+        }
+        let chain = ViewSpec::MultiLookupJoin {
+            view_id: DERIVED_PLACEHOLDER.to_string(),
+            left_table_id: base_id,
+            mv_table_id: DERIVED_PLACEHOLDER.to_string(),
+            join_keys: join_keys.clone(),
+            rights: vec![
+                MultiLookupRight {
+                    table_id: inner_right_id,
+                    filter: inner_right_filter,
+                },
+                MultiLookupRight {
+                    table_id: right_table_id.clone(),
+                    filter: right_filter.clone(),
+                },
+            ],
+            output_columns: columns,
+            refresh_interval_ms: 0,
+        };
+        let Ok(expected) = expected_mv_schema(spec, tables) else {
+            return Ok(None);
+        };
+        let Ok(actual) = expected_mv_schema(&chain, tables) else {
+            return Ok(None);
+        };
+        let schema_ok = schema_matches(actual.as_ref(), expected.as_ref());
+        let keys_ok = self.derived_primary_keys(spec).await?
+            == self.derived_primary_keys(&chain).await?;
+        if !schema_ok || !keys_ok {
+            return Ok(None);
+        }
+        deferred.retain(|view_id| view_id != left_table_id);
+        Ok(Some(FusedMultiLookup {
+            spec: chain,
+            inner_view_id: left_table_id.clone(),
+        }))
+    }
+
     /// Analyze `plan`, materializing the derived views its compound sources
     /// need (bottom-up), and return the outer spec with the rewritten plan.
     async fn analyze_with_derived(
@@ -1838,6 +2061,7 @@ impl IvmSqlExecutor {
                         }
                     };
                     let scan = derived_scan(&table, &self.runtime)?;
+                    let uses = plan_occurrences(&plan, &source);
                     plan = replace_plan(&plan, &source, &scan)?;
                     let renames = mapping
                         .into_iter()
@@ -1847,6 +2071,7 @@ impl IvmSqlExecutor {
                         plan = rename_derived_columns(plan, &renames)?;
                     }
                     tables.insert(table.table_name.clone(), table);
+                    *caches.uses.entry(view_id.clone()).or_default() += uses;
                     if fresh {
                         steps.push(view_id);
                     }
@@ -1888,6 +2113,17 @@ impl IvmSqlExecutor {
         // derived view widens them to the subplan's column names so the
         // rewritten plan resolves its columns.
         widen_derived_join(&mut spec);
+        let mut adopt_state_from = None;
+        if let Some(fused) = self
+            .fuse_multi_lookup(&spec, tables, deferred, caches)
+            .await?
+        {
+            if !caches.fused_inner.contains(&fused.inner_view_id) {
+                caches.fused_inner.push(fused.inner_view_id.clone());
+            }
+            spec = fused.spec;
+            adopt_state_from = Some(fused.inner_view_id);
+        }
         // Two occurrences of the same CTE may differ only in relation aliases;
         // their normalized specs are identical, so reuse the step table (and
         // skip creating a new one).
@@ -1981,6 +2217,10 @@ impl IvmSqlExecutor {
                 });
         }
         spec.set_derived_identity(&view_id, &view_id)?;
+        if let Some(inner_view_id) = adopt_state_from {
+            self.adopt_lookup_join_state(&inner_view_id, &view_id)
+                .await?;
+        }
         if matches!(spec, ViewSpec::Row { .. }) {
             caches.rows.insert(view_id.clone(), spec.clone());
         }
@@ -2311,6 +2551,7 @@ impl IvmSqlExecutor {
                 keys
             }
             ViewSpec::LookupJoin { left_table_id, .. }
+            | ViewSpec::MultiLookupJoin { left_table_id, .. }
             | ViewSpec::SemiAnti { left_table_id, .. } => self
                 .runtime
                 .open_table_by_id(left_table_id)
@@ -2689,6 +2930,62 @@ impl IvmSqlExecutor {
 
     /// Drop the generated state tables of a view (the MV is recycled by the
     /// rebuild, not dropped).
+    /// Move the inner lookup's join-key index to the fused view.  Both views
+    /// have the same left source and join keys, so the rows are the same; the
+    /// inner step is no longer refreshed after fusion.
+    async fn adopt_lookup_join_state(&self, from: &str, to: &str) -> Result<()> {
+        if from == to {
+            return Ok(());
+        }
+        let Some(state) = self
+            .runtime
+            .metadata()
+            .get_state(from, StateRole::JoinLeft)
+            .await?
+        else {
+            return Ok(());
+        };
+        if self
+            .runtime
+            .metadata()
+            .get_state(to, StateRole::JoinLeft)
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
+        let table = self.runtime.open_table_by_id(&state.table_id).await?;
+        self.runtime
+            .metadata()
+            .register_state(to, StateRole::JoinLeft, &table)
+            .await?;
+        self.runtime
+            .metadata()
+            .unregister_state(from, StateRole::JoinLeft)
+            .await?;
+        Ok(())
+    }
+
+    /// Release the inner lookup steps that a fused step replaced.  The view
+    /// metadata stays so a later execution reuses its shape, but its table is
+    /// emptied and its cursors are gone; if it is ever maintained on its own
+    /// again the dirty marker forces a rebuild.
+    async fn release_fused_inner_views(&self, caches: &DerivedCaches) -> Result<()> {
+        for view_id in &caches.fused_inner {
+            let Ok(table) = self.runtime.open_table_by_id(view_id).await else {
+                continue;
+            };
+            self.drop_generated_state(view_id).await?;
+            table.truncate(self.runtime.client()).await?;
+            self.runtime.metadata().delete_cursors(view_id).await?;
+            self.runtime
+                .metadata()
+                .set_view_status(view_id, "dirty")
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn drop_generated_state(&self, view_id: &str) -> Result<()> {
         for state in self.runtime.metadata().list_states(view_id).await? {
             if state.role == StateRole::Mv {
@@ -3082,6 +3379,26 @@ fn expected_mv_schema(
             } else {
                 schema
             }
+        }
+        ViewSpec::MultiLookupJoin {
+            left_table_id,
+            rights,
+            join_keys,
+            output_columns,
+            ..
+        } => {
+            let left = find_table(tables, left_table_id)?;
+            let mut right_schemas = Vec::with_capacity(rights.len());
+            for right in rights {
+                right_schemas.push(find_table(tables, &right.table_id)?.schema.clone());
+            }
+            multi_lookup_join_mv_schema_for(
+                &left.schema,
+                &right_schemas,
+                &left.primary_keys,
+                join_keys,
+                output_columns,
+            )?
         }
         ViewSpec::LookupJoin {
             left_table_id,

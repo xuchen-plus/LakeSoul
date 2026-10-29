@@ -907,6 +907,63 @@ pub fn wide_full_join_view_schema_with_identity_and_keys(
     Ok(Arc::new(Schema::new(fields)))
 }
 
+/// The schema of a [`MultiLookupJoinView`] output.  Left fields keep their
+/// nullability (except left primary keys), every right field is nullable, and
+/// the row kind/epoch columns follow.
+pub fn multi_lookup_join_mv_schema_for(
+    left_schema: &Schema,
+    right_schemas: &[SchemaRef],
+    left_primary_keys: &[String],
+    join_keys: &[String],
+    output_columns: &[MultiLookupColumn],
+) -> Result<SchemaRef> {
+    let mut names = std::collections::HashSet::new();
+    let mut fields = Vec::with_capacity(output_columns.len() + 2);
+    for column in output_columns {
+        let schema = match column.source {
+            0 => left_schema,
+            source => right_schemas
+                .get(source - 1)
+                .map(|schema| schema.as_ref())
+                .ok_or_else(|| {
+                    report!("multi lookup column {} has no right source", column.name)
+                })?,
+        };
+        let field = schema.field_with_name(&column.column).map_err(|_| {
+            report!("multi lookup column {} is not in its source", column.column)
+        })?;
+        if !names.insert(column.name.clone()) {
+            return Err(report!(
+                "multi lookup column {} is materialized twice",
+                column.name
+            ));
+        }
+        let nullable = if column.source == 0 {
+            field.is_nullable()
+                && !(left_primary_keys.contains(&column.column)
+                    && !join_keys.contains(&column.column))
+        } else {
+            true
+        };
+        fields.push(Arc::new(Field::new(
+            column.name.clone(),
+            field.data_type().clone(),
+            nullable,
+        )));
+    }
+    fields.push(Arc::new(Field::new(
+        IVM_ROW_KINDS_COLUMN,
+        DataType::Utf8,
+        false,
+    )));
+    fields.push(Arc::new(Field::new(
+        IVM_EPOCH_COLUMN,
+        DataType::Int64,
+        false,
+    )));
+    Ok(Arc::new(Schema::new(fields)))
+}
+
 /// The schema of a wide [`LookupJoinView`] output: the left fields keep their
 /// nullability and the right fields are nullable (NULL without a match).
 pub fn wide_lookup_join_view_schema_for(
@@ -1638,6 +1695,47 @@ pub struct LookupJoinView {
     pub refresh_interval_ms: i64,
 }
 
+/// A keyed left source joined to several unique right sources with one shared
+/// join-key index.  This is the fused form of a chain of 1:1 lookup joins.
+#[derive(Debug, Clone)]
+pub struct MultiLookupJoinView {
+    /// The view id.
+    pub view_id: String,
+    /// The left source (keyed/upsert).
+    pub left: IvmTable,
+    /// The right sources and their optional filters.
+    pub rights: Vec<(IvmTable, Option<String>)>,
+    /// The materialized output.
+    pub mv: IvmTable,
+    /// The join keys, shared by every right source.
+    pub join_keys: Vec<String>,
+    /// The output columns: source 0 is the left, source `i + 1` is `rights[i]`.
+    pub output_columns: Vec<MultiLookupColumn>,
+    /// The refresh interval hint.
+    pub refresh_interval_ms: i64,
+}
+
+impl MultiLookupJoinView {
+    fn to_spec(&self) -> ViewSpec {
+        ViewSpec::MultiLookupJoin {
+            view_id: self.view_id.clone(),
+            left_table_id: self.left.table_id.clone(),
+            mv_table_id: self.mv.table_id.clone(),
+            join_keys: self.join_keys.clone(),
+            rights: self
+                .rights
+                .iter()
+                .map(|(table, filter)| MultiLookupRight {
+                    table_id: table.table_id.clone(),
+                    filter: filter.clone(),
+                })
+                .collect(),
+            output_columns: self.output_columns.clone(),
+            refresh_interval_ms: self.refresh_interval_ms,
+        }
+    }
+}
+
 impl LookupJoinView {
     /// A new view with no refresh interval hint.
     pub fn new(
@@ -2257,6 +2355,186 @@ fn lookup_join_probe(view: &LookupJoinView) -> JoinView {
         state: view.state.clone(),
         refresh_interval_ms: view.refresh_interval_ms,
     }
+}
+
+/// The alias of a multi-lookup right column in the join frame.
+fn multi_lookup_alias(source: usize, column: &str) -> String {
+    format!("__mlj_{source}_{column}")
+}
+
+/// Validate that a multi-right lookup join can be maintained.
+fn validate_multi_lookup_join_view(view: &MultiLookupJoinView) -> Result<()> {
+    if view.join_keys.is_empty() {
+        return Err(report!(
+            "multi lookup join {} needs join keys",
+            view.view_id
+        ));
+    }
+    if view.rights.is_empty() {
+        return Err(report!(
+            "multi lookup join {} needs at least one right source",
+            view.view_id
+        ));
+    }
+    if view.left.primary_keys.is_empty() {
+        return Err(report!(
+            "multi lookup join {} needs a keyed left source",
+            view.view_id
+        ));
+    }
+    for key in &view.join_keys {
+        view.left.schema.field_with_name(key).map_err(|_| {
+            report!(
+                "multi lookup join {}: join key {key} is not in the left source",
+                view.view_id
+            )
+        })?;
+    }
+    let mut names = std::collections::HashSet::new();
+    for column in &view.output_columns {
+        if !names.insert(column.name.clone()) {
+            return Err(report!(
+                "multi lookup join {}: column {} is materialized twice",
+                view.view_id,
+                column.name
+            ));
+        }
+        let schema = match column.source {
+            0 => &view.left.schema,
+            source => {
+                &view
+                    .rights
+                    .get(source - 1)
+                    .ok_or_else(|| {
+                        report!(
+                            "multi lookup join {}: column {} has no right source",
+                            view.view_id,
+                            column.name
+                        )
+                    })?
+                    .0
+                    .schema
+            }
+        };
+        schema.field_with_name(&column.column).map_err(|_| {
+            report!(
+                "multi lookup join {}: column {} is not in source {}",
+                view.view_id,
+                column.column,
+                column.source
+            )
+        })?;
+    }
+    for key in &view.join_keys {
+        if !view.output_columns.iter().any(|column| {
+            column.source == 0 && column.column == *key && column.name == *key
+        }) {
+            return Err(report!(
+                "multi lookup join {}: output must keep join key {key}",
+                view.view_id
+            ));
+        }
+    }
+    for key in &view.left.primary_keys {
+        if !view.output_columns.iter().any(|column| {
+            column.source == 0 && column.column == *key && column.name == *key
+        }) {
+            return Err(report!(
+                "multi lookup join {}: output must keep left key {key}",
+                view.view_id
+            ));
+        }
+    }
+    for (right, filter) in &view.rights {
+        if let Some(filter) = filter {
+            let context = refresh_session();
+            parse_filter(&context, &right.schema, filter)?;
+        }
+        let mut primary = right.primary_keys.clone();
+        let mut keys = view.join_keys.clone();
+        primary.sort();
+        keys.sort();
+        if primary != keys {
+            return Err(report!(
+                "multi lookup join {}: right source {} must be keyed by the join keys",
+                view.view_id,
+                right.table_name
+            ));
+        }
+    }
+    let mut primary = view.left.primary_keys.clone();
+    let mut mv_keys = view.mv.primary_keys.clone();
+    primary.sort();
+    mv_keys.sort();
+    if primary != mv_keys {
+        return Err(report!(
+            "multi lookup join {}: the MV must keep the left primary key",
+            view.view_id
+        ));
+    }
+    Ok(())
+}
+
+/// The output expressions of a multi-right lookup join over its joined frame.
+fn multi_lookup_output_exprs(view: &MultiLookupJoinView) -> Vec<Expr> {
+    view.output_columns
+        .iter()
+        .map(|column| {
+            let value = if column.source == 0 {
+                col(column.column.as_str())
+            } else {
+                col(multi_lookup_alias(column.source, &column.column).as_str())
+            };
+            value.alias(column.name.as_str())
+        })
+        .collect()
+}
+
+/// Left-join every right source onto the left frame and project the output.
+fn join_multi_lookup_frames(
+    mut left: DataFrame,
+    rights: Vec<DataFrame>,
+    view: &MultiLookupJoinView,
+) -> Result<DataFrame> {
+    for (index, right) in rights.into_iter().enumerate() {
+        let source = index + 1;
+        let mut columns = view
+            .join_keys
+            .iter()
+            .map(|key| col(key.as_str()).alias(multi_lookup_alias(source, key).as_str()))
+            .collect::<Vec<_>>();
+        let mut selected = std::collections::HashSet::new();
+        for column in view
+            .output_columns
+            .iter()
+            .filter(|column| column.source == source)
+        {
+            if selected.insert(column.column.clone()) {
+                columns.push(
+                    col(column.column.as_str())
+                        .alias(multi_lookup_alias(source, &column.column).as_str()),
+                );
+            }
+        }
+        let right = right.select(columns)?;
+        let right_keys = view
+            .join_keys
+            .iter()
+            .map(|key| multi_lookup_alias(source, key))
+            .collect::<Vec<_>>();
+        left = left.join(
+            right,
+            JoinType::Left,
+            &view
+                .join_keys
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            &right_keys.iter().map(String::as_str).collect::<Vec<_>>(),
+            None,
+        )?;
+    }
+    Ok(left.select(multi_lookup_output_exprs(view))?)
 }
 
 /// Validate that a lookup join view can be maintained.
@@ -5589,6 +5867,423 @@ impl IvmRuntime {
         self.advance_cursors(&view.view_id, right_window.cursors)
             .await?;
         Ok(Some(epoch))
+    }
+
+    /// Persist a multi-right lookup join spec (idempotent).
+    pub async fn register_multi_lookup_join_view(
+        &self,
+        view: &MultiLookupJoinView,
+    ) -> Result<()> {
+        self.register_state_tables(&view.view_id, &[(StateRole::Mv, &view.mv)])
+            .await?;
+        let spec = serde_json::to_value(view.to_spec())?;
+        self.metadata
+            .upsert_view(&view.view_id, &spec, view.refresh_interval_ms)
+            .await
+    }
+
+    fn multi_lookup_probe<'a>(
+        &self,
+        view: &'a MultiLookupJoinView,
+        right: &'a IvmTable,
+        filter: Option<String>,
+    ) -> LookupJoinView {
+        LookupJoinView {
+            view_id: view.view_id.clone(),
+            left: view.left.clone(),
+            right: right.clone(),
+            output: view.mv.clone(),
+            join_keys: view.join_keys.clone(),
+            right_keys: Vec::new(),
+            key_exprs: JoinKeyExprs::default(),
+            left_filter: None,
+            right_filter: filter,
+            left_value: String::new(),
+            right_value: String::new(),
+            output_columns: Vec::new(),
+            state: None,
+            refresh_interval_ms: view.refresh_interval_ms,
+        }
+    }
+
+    /// Refresh a multi-right lookup join: the left delta plus, for every
+    /// changed right, the left rows found through the shared join-key index.
+    pub async fn refresh_multi_lookup_join(
+        &self,
+        view: &MultiLookupJoinView,
+    ) -> Result<Option<i64>> {
+        self.register_multi_lookup_join_view(view).await?;
+        validate_multi_lookup_join_view(view)?;
+
+        let left_window = self
+            .collect_source_window(&view.view_id, &view.left)
+            .await?;
+        let mut right_windows = Vec::with_capacity(view.rights.len());
+        for (right, filter) in &view.rights {
+            right_windows.push(
+                self.collect_source_window_for_filter(
+                    &view.view_id,
+                    right,
+                    filter.as_deref(),
+                )
+                .await?,
+            );
+        }
+        if left_window.added_files.is_empty()
+            && right_windows
+                .iter()
+                .all(|window| window.added_files.is_empty())
+        {
+            return Ok(None);
+        }
+        let mut identity = left_window.identity.clone();
+        for window in &right_windows {
+            identity.extend(window.identity.iter().cloned());
+        }
+        let record = match self
+            .begin_window(&view.view_id, &identity, &view.mv)
+            .await?
+        {
+            WindowStart::AlreadyApplied(epoch) => {
+                self.advance_cursors(&view.view_id, left_window.cursors)
+                    .await?;
+                for window in right_windows {
+                    self.advance_cursors(&view.view_id, window.cursors).await?;
+                }
+                return Ok(Some(epoch));
+            }
+            WindowStart::Apply(record) => record,
+        };
+        let epoch = record.epoch;
+        let mut commit_ids = Vec::new();
+
+        let left_state = self
+            .ensure_join_side_state(
+                &view.view_id,
+                &view.left,
+                &view.join_keys,
+                StateRole::JoinLeft,
+            )
+            .await?;
+        if let Some(state) = &left_state {
+            commit_ids.extend(if state.current_files(&self.client).await?.is_empty() {
+                self.sync_join_side_state(
+                    &view.left,
+                    state,
+                    &view.join_keys,
+                    &JoinKeyExprs::default().left,
+                )
+                .await?
+            } else {
+                self.apply_join_side_delta(
+                    &view.left,
+                    state,
+                    &left_window,
+                    &view.join_keys,
+                    &JoinKeyExprs::default().left,
+                )
+                .await?
+            });
+        }
+        self.checkpoint_epoch_states(&record).await?;
+
+        let context = refresh_session();
+        let left_changed = !left_window.added_files.is_empty();
+        let left_pks = view.left.primary_keys.clone();
+        let pk_exprs = left_pks
+            .iter()
+            .map(|key| col(key.as_str()))
+            .collect::<Vec<_>>();
+        // A left change is taken from the window delta itself.  Re-reading the
+        // source by primary key would still see an older insert when the same
+        // window also has a delete marker for that key.
+        let left_delta = if left_changed {
+            Some(self.groups_table_frame(
+                &context,
+                &view.left,
+                left_window.added_files.clone(),
+            )?)
+        } else {
+            None
+        };
+        let mut affected = match &left_delta {
+            Some(delta) => delta.clone().select(pk_exprs.clone())?.distinct()?,
+            None => {
+                let schema = project_schema(&view.left.schema, &left_pks)?;
+                dataframe(&context, Vec::new(), &schema)?
+            }
+        };
+        let mut left_from_right: Option<DataFrame> = None;
+
+        for (index, (right, filter)) in view.rights.iter().enumerate() {
+            if right_windows[index].added_files.is_empty() {
+                continue;
+            }
+            let delta = self.groups_table_frame(
+                &context,
+                right,
+                right_windows[index].added_files.clone(),
+            )?;
+            // The right primary key is the join key, so every affected key is
+            // present in the delta itself: an update keeps its key, and a key
+            // change arrives as a delete of the old key plus an insert of the
+            // new one.  No before-image lookup is needed.
+            let changed_keys = delta
+                .select(
+                    view.join_keys
+                        .iter()
+                        .map(|key| col(key.as_str()))
+                        .collect::<Vec<_>>(),
+                )?
+                .distinct()?;
+            let from_right = if left_state.is_some() {
+                let probe_view = self.multi_lookup_probe(view, right, filter.clone());
+                let probe = lookup_join_probe(&probe_view);
+                self.lookup_left_rows_for_keys(
+                    &context,
+                    &probe,
+                    left_state.as_ref(),
+                    changed_keys,
+                )
+                .await?
+            } else {
+                // The left primary key is the join key, so its lookup uses
+                // the join-key names in the contribution order.
+                self.lookup_source_by_join_keys(
+                    &context,
+                    &view.left,
+                    changed_keys,
+                    &view.join_keys,
+                    &view.join_keys,
+                    true,
+                )
+                .await?
+            };
+            affected = affected
+                .union(from_right.clone().select(pk_exprs.clone())?)?
+                .distinct()?;
+            left_from_right = Some(match left_from_right {
+                Some(rows) => rows.union(from_right)?.distinct()?,
+                None => from_right,
+            });
+        }
+        let affected = affected.distinct()?;
+        let left_now = match (left_delta, left_from_right) {
+            (Some(delta), Some(rows)) => delta.union(rows)?.distinct()?,
+            (Some(delta), None) => delta,
+            (None, Some(rows)) => rows,
+            (None, None) => dataframe(&context, Vec::new(), &view.left.schema)?,
+        };
+        let left_now = filter_deletes(left_now, change_column(&view.left))?;
+        let mut right_nows = Vec::with_capacity(view.rights.len());
+        for (right, filter) in &view.rights {
+            let contribution = left_now
+                .clone()
+                .select(
+                    view.join_keys
+                        .iter()
+                        .map(|key| col(key.as_str()))
+                        .collect::<Vec<_>>(),
+                )?
+                .distinct()?;
+            let now = self
+                .lookup_source_by_join_keys(
+                    &context,
+                    right,
+                    contribution,
+                    &view.join_keys,
+                    &view.join_keys,
+                    false,
+                )
+                .await?;
+            right_nows.push(apply_side_filter(
+                &context,
+                filter_deletes(now, change_column(right))?,
+                &right.schema,
+                filter.as_deref(),
+            )?);
+        }
+        let joined = join_multi_lookup_frames(left_now, right_nows, view)?;
+
+        let mv = self
+            .lookup_source_by_join_keys(
+                &context,
+                &view.mv,
+                affected.clone(),
+                &left_pks,
+                &view.mv.primary_keys,
+                true,
+            )
+            .await?;
+        let already = mv
+            .clone()
+            .filter(col(IVM_EPOCH_COLUMN).eq(lit(epoch)))?
+            .select(pk_exprs.clone())?
+            .distinct()?;
+        let inserts = joined
+            .join(
+                affected.clone(),
+                JoinType::LeftSemi,
+                &left_pks.iter().map(String::as_str).collect::<Vec<_>>(),
+                &left_pks.iter().map(String::as_str).collect::<Vec<_>>(),
+                None,
+            )?
+            .join(
+                already,
+                JoinType::LeftAnti,
+                &left_pks.iter().map(String::as_str).collect::<Vec<_>>(),
+                &left_pks.iter().map(String::as_str).collect::<Vec<_>>(),
+                None,
+            )?
+            .with_column(IVM_ROW_KINDS_COLUMN, lit("insert"))?
+            .with_column(IVM_EPOCH_COLUMN, lit(epoch))?;
+        let deletes = mv
+            .join(
+                affected,
+                JoinType::LeftSemi,
+                &left_pks.iter().map(String::as_str).collect::<Vec<_>>(),
+                &left_pks.iter().map(String::as_str).collect::<Vec<_>>(),
+                None,
+            )?
+            .filter(col(IVM_EPOCH_COLUMN).not_eq(lit(epoch)))?
+            .select(
+                view.output_columns
+                    .iter()
+                    .map(|column| col(column.name.as_str()))
+                    .collect::<Vec<_>>(),
+            )?
+            .with_column(IVM_ROW_KINDS_COLUMN, lit("delete"))?
+            .with_column(IVM_EPOCH_COLUMN, lit(epoch))?;
+
+        let mut sort_exprs = pk_exprs;
+        sort_exprs.push(column_expr(IVM_ROW_KINDS_COLUMN));
+        commit_ids.extend(
+            self.append_join_rows(
+                &view.mv,
+                None,
+                None,
+                inserts.union(deletes)?.sort_by(sort_exprs)?,
+            )
+            .await?,
+        );
+        self.checkpoint_epoch_states(&record).await?;
+        let mv_versions = output_partition_versions(&self.client, &view.mv).await?;
+        self.mark_epoch_committed(&record, &mv_versions, &commit_ids)
+            .await?;
+        self.advance_cursors(&view.view_id, left_window.cursors)
+            .await?;
+        for window in right_windows {
+            self.advance_cursors(&view.view_id, window.cursors).await?;
+        }
+        Ok(Some(epoch))
+    }
+
+    /// Rebuild a multi-right lookup join from the full source states.
+    pub async fn rebuild_multi_lookup_join(
+        &self,
+        view: &MultiLookupJoinView,
+    ) -> Result<i64> {
+        self.register_multi_lookup_join_view(view).await?;
+        validate_multi_lookup_join_view(view)?;
+        self.metadata
+            .set_view_status(&view.view_id, "rebuilding")
+            .await?;
+        let generation = self.metadata.bump_generation(&view.view_id).await?;
+        self.metadata.delete_cursors(&view.view_id).await?;
+        view.mv.truncate(&self.client).await?;
+
+        let left_baseline = self.source_baseline(&view.left).await?;
+        let mut to_versions = left_baseline.to_versions;
+        let mut cursors = left_baseline.cursors;
+        let mut right_groups = Vec::with_capacity(view.rights.len());
+        for (right, filter) in &view.rights {
+            let baseline = self
+                .source_baseline_for_filter(right, filter.as_deref())
+                .await?;
+            to_versions.extend(baseline.to_versions);
+            cursors.extend(baseline.cursors);
+            right_groups.push((right.clone(), baseline.groups, filter.clone()));
+        }
+        let mv_versions_before =
+            output_partition_versions(&self.client, &view.mv).await?;
+        let record = match self
+            .metadata
+            .begin_epoch(
+                &view.view_id,
+                &format!("rebuild:{generation}"),
+                &to_versions,
+                &mv_versions_before,
+            )
+            .await?
+        {
+            BeginEpoch::Committed(record) => {
+                self.advance_cursors(&view.view_id, cursors).await?;
+                self.metadata
+                    .set_view_status(&view.view_id, "active")
+                    .await?;
+                return Ok(record.epoch);
+            }
+            BeginEpoch::Created(record) | BeginEpoch::Pending(record) => record,
+        };
+        let epoch = record.epoch;
+        let mut commit_ids = Vec::new();
+
+        let left_state = self
+            .ensure_join_side_state(
+                &view.view_id,
+                &view.left,
+                &view.join_keys,
+                StateRole::JoinLeft,
+            )
+            .await?;
+        if let Some(state) = left_state {
+            commit_ids.extend(
+                self.sync_join_side_state(
+                    &view.left,
+                    &state,
+                    &view.join_keys,
+                    &JoinKeyExprs::default().left,
+                )
+                .await?,
+            );
+        }
+
+        let context = refresh_session();
+        let left_now = filter_deletes(
+            self.groups_table_frame(&context, &view.left, left_baseline.groups)?,
+            change_column(&view.left),
+        )?;
+        let mut right_nows = Vec::with_capacity(right_groups.len());
+        for (right, groups, filter) in right_groups {
+            let now = filter_deletes(
+                self.groups_table_frame(&context, &right, groups)?,
+                change_column(&right),
+            )?;
+            right_nows.push(apply_side_filter(
+                &context,
+                now,
+                &right.schema,
+                filter.as_deref(),
+            )?);
+        }
+        let joined = join_multi_lookup_frames(left_now, right_nows, view)?;
+        let frame = joined
+            .with_column(IVM_ROW_KINDS_COLUMN, lit("insert"))?
+            .with_column(IVM_EPOCH_COLUMN, lit(epoch))?;
+        commit_ids.extend(
+            append_dataframe(&view.mv, &self.client, frame)
+                .await?
+                .commit_ids,
+        );
+        self.checkpoint_epoch_states(&record).await?;
+        let mv_versions = output_partition_versions(&self.client, &view.mv).await?;
+        self.mark_epoch_committed(&record, &mv_versions, &commit_ids)
+            .await?;
+        self.advance_cursors(&view.view_id, cursors).await?;
+        self.metadata
+            .set_view_status(&view.view_id, "active")
+            .await?;
+        Ok(epoch)
     }
 
     /// Rebuild a lookup join view from the full source state.

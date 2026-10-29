@@ -281,6 +281,27 @@ pub enum ViewSpec {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         null_safe: bool,
     },
+    /// A keyed lookup join with several 1:1 right sources that share one
+    /// set of join keys.  The left side keeps one join-key index, so a right
+    /// change maps back to affected left rows without scanning the left table.
+    MultiLookupJoin {
+        /// The view id.
+        view_id: String,
+        /// The left source table id (keyed).
+        left_table_id: String,
+        /// The materialized view table id.
+        mv_table_id: String,
+        /// The join keys, shared by every right source.
+        join_keys: Vec<String>,
+        /// The right sources in output order.
+        rights: Vec<MultiLookupRight>,
+        /// The materialized columns; source 0 is the left, source `i + 1`
+        /// is `rights[i]`.
+        output_columns: Vec<MultiLookupColumn>,
+        /// The refresh interval hint persisted with the view.
+        #[serde(default)]
+        refresh_interval_ms: i64,
+    },
     /// `LEFT JOIN` over two keyed sources: every left row with all its
     /// matching right rows (a NULL-padded row when nothing matches).
     ///
@@ -1255,6 +1276,7 @@ impl ViewSpec {
             | ViewSpec::MultiJoin { view_id, .. }
             | ViewSpec::MultiAgg { view_id, .. }
             | ViewSpec::LookupJoin { view_id, .. }
+            | ViewSpec::MultiLookupJoin { view_id, .. }
             | ViewSpec::LeftJoin { view_id, .. }
             | ViewSpec::FullJoin { view_id, .. }
             | ViewSpec::CrossJoin { view_id, .. }
@@ -1346,6 +1368,14 @@ impl ViewSpec {
             ViewSpec::Fallback { tables, .. } => {
                 ids.extend(tables.iter().map(String::as_str));
             }
+            ViewSpec::MultiLookupJoin {
+                left_table_id,
+                rights,
+                ..
+            } => {
+                ids.push(left_table_id.as_str());
+                ids.extend(rights.iter().map(|right| right.table_id.as_str()));
+            }
             ViewSpec::Join {
                 left_table_id,
                 right_table_id,
@@ -1434,6 +1464,11 @@ impl ViewSpec {
                 ..
             }
             | ViewSpec::MultiJoin {
+                view_id: id,
+                mv_table_id: mv,
+                ..
+            }
+            | ViewSpec::MultiLookupJoin {
                 view_id: id,
                 mv_table_id: mv,
                 ..
@@ -1634,6 +1669,7 @@ impl ViewSpec {
             ViewSpec::MultiJoin { .. } => "multi_join",
             ViewSpec::MultiAgg { .. } => "multi_agg",
             ViewSpec::LookupJoin { .. } => "lookup_join",
+            ViewSpec::MultiLookupJoin { .. } => "multi_lookup_join",
             ViewSpec::LeftJoin { .. } => "left_join",
             ViewSpec::FullJoin { .. } => "full_join",
             ViewSpec::CrossJoin { .. } => "cross_join",
@@ -1653,6 +1689,27 @@ impl ViewSpec {
             ViewSpec::Sink { .. } => "sink",
         }
     }
+}
+
+/// One right source of a [`ViewSpec::MultiLookupJoin`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiLookupRight {
+    /// The right table id; its primary key must equal `join_keys`.
+    pub table_id: String,
+    /// An optional filter the right rows must satisfy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+}
+
+/// One materialized column of a [`ViewSpec::MultiLookupJoin`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiLookupColumn {
+    /// Source index: 0 is the left, `i + 1` is `rights[i]`.
+    pub source: usize,
+    /// The source column.
+    pub column: String,
+    /// The MV column name.
+    pub name: String,
 }
 
 /// One source of a [`ViewSpec::LookupChain`] (index 0 is the base).
@@ -1723,6 +1780,7 @@ enum SpecView {
     MultiJoin(MultiJoinView),
     MultiAgg(MultiAggView),
     LookupJoin(LookupJoinView),
+    MultiLookupJoin(MultiLookupJoinView),
     LeftJoin(LeftJoinView),
     FullJoin(FullJoinView),
     CrossJoin(CrossJoinView),
@@ -3584,6 +3642,32 @@ impl IvmRuntime {
                 null_safe: *null_safe,
                 refresh_interval_ms,
             }),
+            ViewSpec::MultiLookupJoin {
+                view_id,
+                left_table_id,
+                mv_table_id,
+                join_keys,
+                rights,
+                output_columns,
+                refresh_interval_ms,
+            } => {
+                let mut opened = Vec::with_capacity(rights.len());
+                for right in rights {
+                    opened.push((
+                        self.open_table_by_id(&right.table_id).await?,
+                        right.filter.clone(),
+                    ));
+                }
+                SpecView::MultiLookupJoin(MultiLookupJoinView {
+                    view_id: view_id.clone(),
+                    left: self.open_table_by_id(left_table_id).await?,
+                    rights: opened,
+                    mv: self.open_table_by_id(mv_table_id).await?,
+                    join_keys: join_keys.clone(),
+                    output_columns: output_columns.clone(),
+                    refresh_interval_ms: *refresh_interval_ms,
+                })
+            }
             ViewSpec::LeftJoin {
                 view_id,
                 left_table_id,
@@ -4291,6 +4375,9 @@ impl IvmRuntime {
                 Ok(SpecView::MultiJoin(view)) => self.refresh_multi_join(&view).await,
                 Ok(SpecView::MultiAgg(view)) => self.refresh_multi_agg(&view).await,
                 Ok(SpecView::LookupJoin(view)) => self.refresh_lookup_join(&view).await,
+                Ok(SpecView::MultiLookupJoin(view)) => {
+                    self.refresh_multi_lookup_join(&view).await
+                }
                 Ok(SpecView::LeftJoin(view)) => self.refresh_left_join(&view).await,
                 Ok(SpecView::FullJoin(view)) => self.refresh_full_join(&view).await,
                 Ok(SpecView::CrossJoin(view)) => self.refresh_cross_join(&view).await,
@@ -4366,6 +4453,9 @@ impl IvmRuntime {
                 Ok(SpecView::MultiJoin(view)) => self.rebuild_multi_join(&view).await,
                 Ok(SpecView::MultiAgg(view)) => self.rebuild_multi_agg(&view).await,
                 Ok(SpecView::LookupJoin(view)) => self.rebuild_lookup_join(&view).await,
+                Ok(SpecView::MultiLookupJoin(view)) => {
+                    self.rebuild_multi_lookup_join(&view).await
+                }
                 Ok(SpecView::LeftJoin(view)) => self.rebuild_left_join(&view).await,
                 Ok(SpecView::FullJoin(view)) => self.rebuild_full_join(&view).await,
                 Ok(SpecView::CrossJoin(view)) => self.rebuild_cross_join(&view).await,
