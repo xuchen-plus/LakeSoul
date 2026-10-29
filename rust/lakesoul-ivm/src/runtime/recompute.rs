@@ -53,10 +53,11 @@ pub fn multi_agg_state_schema_for(
 
 /// The schema of the row-level state of a multi-aggregate view.
 ///
-/// It carries every source column (apart from the internal change columns)
-/// plus its own row kind and epoch.  The state primary key is the group keys
-/// followed by the source primary keys, so a group lookup is a PK prefix
-/// lookup and a source-key update is an exact PK upsert.
+/// It carries the source columns the view reads (group keys, aggregate and
+/// filter inputs, and the source primary keys) plus its own row kind and
+/// epoch.  The state primary key is the group keys followed by the source
+/// primary keys, so a group lookup is a PK prefix lookup and a source-key
+/// update is an exact PK upsert.
 pub fn multi_agg_rows_state_schema_for(
     source_schema: &Schema,
     group_keys: &[String],
@@ -4166,21 +4167,21 @@ impl IvmRuntime {
         let context = refresh_session();
         let delta =
             self.groups_table_frame(&context, &view.source, window.added_files.clone())?;
-        let source_fields = view
-            .source
+        // The state is already projected to the columns the view reads.
+        // Computed group keys are part of its schema as well.  The epoch is
+        // bookkeeping; the source change marker stays because the recompute
+        // SQL reads it.
+        let state_fields = state
             .schema
             .fields()
             .iter()
             .map(|field| field.name().clone())
+            .filter(|column| {
+                column != IVM_EPOCH_COLUMN
+                    && (view.source.schema.field_with_name(column).is_ok()
+                        || view.group_keys.contains(column))
+            })
             .collect::<Vec<_>>();
-        // A computed group key may not be a source column; the state stores
-        // it next to the source row so the PK prefix can address the group.
-        let mut state_fields = source_fields.clone();
-        for key in &view.group_keys {
-            if !state_fields.contains(key) {
-                state_fields.push(key.clone());
-            }
-        }
         let pk_exprs = view
             .source
             .primary_keys

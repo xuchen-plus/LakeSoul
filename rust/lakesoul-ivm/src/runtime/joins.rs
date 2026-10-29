@@ -3567,7 +3567,7 @@ fn join_is_keyed(view: &JoinView) -> bool {
 
 /// Add the encoded join-key column to a contribution frame without collecting
 /// the delta key batches in the driver.
-fn encode_join_key_frame(
+pub(crate) fn encode_join_key_frame(
     context: &SessionContext,
     frame: DataFrame,
     source: &IvmTable,

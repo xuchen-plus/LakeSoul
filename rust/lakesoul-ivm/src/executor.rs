@@ -2628,6 +2628,79 @@ impl IvmSqlExecutor {
         Ok(())
     }
 
+    /// The source columns the row-level state of a multi-aggregate view must
+    /// keep: the group keys, every column an aggregate call or filter references,
+    /// and the source primary keys (added by the projected source).  Columns the
+    /// view never reads are not copied into the state.
+    fn multi_agg_rows_state_columns(
+        context: &datafusion::prelude::SessionContext,
+        source_schema: &arrow_schema::SchemaRef,
+        group_keys: &[String],
+        group_exprs: &[String],
+        aggregates: &[crate::runtime::MultiAggSpec],
+        filter: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let mut columns = group_keys.to_vec();
+        let df_schema =
+            datafusion::common::DFSchema::try_from(source_schema.as_ref().clone())
+                .map_err(|error| rootcause::report!("invalid source schema: {error}"))?;
+        let mut add = |expression: &str| -> Result<()> {
+            let expression = context
+                .state()
+                .create_logical_expr(expression, &df_schema)
+                .map_err(|error| {
+                    rootcause::report!(
+                        "invalid aggregate expression {expression:?}: {error}"
+                    )
+                })?;
+            for column in expression.column_refs() {
+                if !columns.contains(&column.name) {
+                    columns.push(column.name.clone());
+                }
+            }
+            Ok(())
+        };
+        for (key, expression) in group_keys.iter().zip(group_exprs) {
+            if !expression.is_empty() && expression != key {
+                add(expression)?;
+            }
+        }
+        for aggregate in aggregates {
+            add(&aggregate.call)?;
+        }
+        if let Some(filter) = filter {
+            for column in crate::runtime::filter_columns(context, source_schema, filter)?
+            {
+                if !columns.contains(&column) {
+                    columns.push(column);
+                }
+            }
+        }
+        Ok(columns)
+    }
+
+    /// Whether an older row state still has every column the projection
+    /// reads.  Such a state is used as-is: its extra source columns stay in
+    /// the physical schema (and are maintained on writes) instead of forcing
+    /// a full rebuild just to trim them.  New states are created projected.
+    fn state_schema_compatible(
+        actual: &arrow_schema::SchemaRef,
+        expected: &arrow_schema::SchemaRef,
+        source: &arrow_schema::SchemaRef,
+        group_keys: &[String],
+    ) -> bool {
+        expected.fields().iter().all(|field| {
+            actual
+                .field_with_name(field.name())
+                .is_ok_and(|actual| actual.data_type() == field.data_type())
+        }) && actual.fields().iter().all(|field| {
+            source.field_with_name(field.name()).is_ok()
+                || group_keys.contains(field.name())
+                || field.name() == IVM_ROW_KINDS_COLUMN
+                || field.name() == IVM_EPOCH_COLUMN
+        })
+    }
+
     /// The value-count state table of the view, reusing the registered one when
     /// its schema still matches and recreating it otherwise.
     async fn ensure_state_table(
@@ -2649,6 +2722,7 @@ impl IvmSqlExecutor {
             } else {
                 vec![primary_keys[0].clone()]
             };
+            let mut replaced = false;
             if let Some(existing) = self
                 .runtime
                 .metadata()
@@ -2665,11 +2739,9 @@ impl IvmSqlExecutor {
                     .metadata()
                     .unregister_state(spec.view_id(), StateRole::State)
                     .await?;
-                let _ = self
-                    .runtime
-                    .client()
-                    .drop_table(&table.table_name, &table.namespace)
-                    .await;
+                // Keep the old physical table: a stored spec may still carry
+                // its id until the re-analysis persists the replacement.
+                replaced = true;
             }
             let suffix = &uuid::Uuid::new_v4().simple().to_string()[..8];
             let mut options = IvmTableOptions::new(
@@ -2686,6 +2758,14 @@ impl IvmSqlExecutor {
             }
             options.hash_bucket_num = mv.hash_bucket_num.clone();
             let table = create_ivm_table(self.runtime.client(), options).await?;
+            if replaced {
+                // The state starts empty, so the next refresh must rebuild the
+                // view instead of applying a delta to an empty state.
+                self.runtime
+                    .metadata()
+                    .set_view_status(spec.view_id(), "dirty")
+                    .await?;
+            }
             return Ok(Some(table.table_id));
         }
         if !multi_agg_value_state_eligible(spec)
@@ -2693,6 +2773,8 @@ impl IvmSqlExecutor {
                 source_table_id,
                 group_keys,
                 group_exprs,
+                aggregates,
+                filter,
                 ..
             } = spec
         {
@@ -2713,16 +2795,30 @@ impl IvmSqlExecutor {
                 );
                 return Ok(None);
             }
-            let schema =
-                multi_agg_rows_state_schema_for(&source.schema, group_keys, group_exprs)?;
+            let state_columns = Self::multi_agg_rows_state_columns(
+                &refresh_session(),
+                &source.schema,
+                group_keys,
+                group_exprs,
+                aggregates,
+                filter.as_deref(),
+            )?;
+            let state_source = source.projected_state_source(&state_columns)?;
+            let schema = multi_agg_rows_state_schema_for(
+                &state_source.schema,
+                group_keys,
+                group_exprs,
+            )?;
             let mut primary_keys = group_keys.clone();
-            for key in &source.primary_keys {
+            for key in &state_source.primary_keys {
                 if !primary_keys.contains(key) {
                     primary_keys.push(key.clone());
                 }
             }
             let bucket_columns = group_keys.clone();
-            let range_partitions = state_range_partition_columns(&source, &primary_keys);
+            let range_partitions =
+                state_range_partition_columns(&state_source, &primary_keys);
+            let mut replaced = false;
             if let Some(existing) = self
                 .runtime
                 .metadata()
@@ -2730,7 +2826,13 @@ impl IvmSqlExecutor {
                 .await?
             {
                 let table = self.runtime.open_table_by_id(&existing.table_id).await?;
-                if schema_matches(&table.schema, &schema)
+                if (schema_matches(&table.schema, &schema)
+                    || Self::state_schema_compatible(
+                        &table.schema,
+                        &schema,
+                        &state_source.schema,
+                        group_keys,
+                    ))
                     && table.primary_keys == primary_keys
                 {
                     return Ok(Some(table.table_id));
@@ -2739,31 +2841,27 @@ impl IvmSqlExecutor {
                     .metadata()
                     .unregister_state(spec.view_id(), StateRole::MultiAggRows)
                     .await?;
-                let _ = self
-                    .runtime
-                    .client()
-                    .drop_table(&table.table_name, &table.namespace)
-                    .await;
+                replaced = true;
+                // Keep the old physical table: a stored view spec may still
+                // reference its id until the re-analysis below persists the
+                // new state id.  It stays unregistered and inert afterwards.
             }
             // A compact aggregate state from an older definition would make
             // the refresh pick the wrong path; remove it when switching to
             // row-level state.
-            if let Some(existing) = self
+            if self
                 .runtime
                 .metadata()
                 .get_state(spec.view_id(), StateRole::State)
                 .await?
+                .is_some()
             {
                 self.runtime
                     .metadata()
                     .unregister_state(spec.view_id(), StateRole::State)
                     .await?;
-                let table = self.runtime.open_table_by_id(&existing.table_id).await?;
-                let _ = self
-                    .runtime
-                    .client()
-                    .drop_table(&table.table_name, &table.namespace)
-                    .await;
+                // The same physical table can be registered under both roles;
+                // leave it in place for the same migration reason as above.
             }
             let suffix = &uuid::Uuid::new_v4().simple().to_string()[..8];
             let mut options = IvmTableOptions::new(
@@ -2785,6 +2883,14 @@ impl IvmSqlExecutor {
                 .metadata()
                 .register_state(spec.view_id(), StateRole::MultiAggRows, &table)
                 .await?;
+            if replaced {
+                // An empty recreated row state cannot answer the old groups;
+                // rebuild the view from the source instead.
+                self.runtime
+                    .metadata()
+                    .set_view_status(spec.view_id(), "dirty")
+                    .await?;
+            }
             return Ok(Some(table.table_id));
         }
         if let ViewSpec::MultiAgg {

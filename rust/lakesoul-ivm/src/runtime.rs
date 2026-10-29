@@ -11,7 +11,7 @@
 //! idempotent per cursor: the cursor only advances once its delta has been
 //! committed.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use arrow::array::{ArrayRef, BinaryArray, BinaryBuilder};
@@ -2342,6 +2342,66 @@ pub struct IvmRuntime {
     /// unique-key chains; unknown after a process restart until the next
     /// rebuild/bootstrap.
     view_rows: Mutex<HashMap<String, u64>>,
+    /// Right-key existence shared by the plain SEMI/ANTI views of one right
+    /// window.  The key is `(right table, right join keys)`, and the value is
+    /// the set of encoded keys already probed plus the subset that exists.
+    /// It is deliberately scoped to one source window: a right change starts
+    /// a new window and invalidates every previous answer.
+    semi_anti_right_keys: Mutex<SemiAntiRightKeyCache>,
+}
+
+/// The shared right-key answers of one source window.
+#[derive(Default)]
+pub(crate) struct SemiAntiRightKeyCache {
+    window: String,
+    tables: HashMap<String, SemiAntiRightKeySet>,
+}
+
+/// The encoded keys a plain SEMI/ANTI view already asked the right side for.
+#[derive(Default)]
+pub(crate) struct SemiAntiRightKeySet {
+    probed: HashSet<Vec<u8>>,
+    present: HashSet<Vec<u8>>,
+}
+
+impl SemiAntiRightKeyCache {
+    /// Start a new window, dropping answers from the previous one.
+    pub(crate) fn begin_window(&mut self, window: &str) {
+        if self.window != window {
+            self.window = window.to_string();
+            self.tables.clear();
+        }
+    }
+
+    /// The keys known present and the keys that still need a probe.
+    pub(crate) fn lookup(
+        &mut self,
+        table: &str,
+        requested: &HashSet<Vec<u8>>,
+    ) -> (HashSet<Vec<u8>>, HashSet<Vec<u8>>) {
+        let entry = self.tables.entry(table.to_string()).or_default();
+        let present = requested
+            .intersection(&entry.present)
+            .cloned()
+            .collect::<HashSet<_>>();
+        let unknown = requested
+            .difference(&entry.probed)
+            .cloned()
+            .collect::<HashSet<_>>();
+        (present, unknown)
+    }
+
+    /// Record one probe of `unknown` that found `present`.
+    pub(crate) fn record(
+        &mut self,
+        table: &str,
+        unknown: &HashSet<Vec<u8>>,
+        present: &HashSet<Vec<u8>>,
+    ) {
+        let entry = self.tables.entry(table.to_string()).or_default();
+        entry.probed.extend(unknown.iter().cloned());
+        entry.present.extend(present.iter().cloned());
+    }
 }
 
 /// The attachment a refresh failure carries when a source partition was
@@ -3267,7 +3327,7 @@ fn project_schema(schema: &Schema, columns: &[String]) -> Result<SchemaRef> {
 }
 
 /// The plain columns a rendered filter references.
-fn filter_columns(
+pub(crate) fn filter_columns(
     context: &SessionContext,
     schema: &SchemaRef,
     filter: &str,
@@ -3394,6 +3454,7 @@ impl IvmRuntime {
             client: MetaDataClient::from_env().await?,
             metadata: IvmMetadata::from_env().await?,
             view_rows: Mutex::new(HashMap::new()),
+            semi_anti_right_keys: Mutex::new(SemiAntiRightKeyCache::default()),
         })
     }
 
@@ -3405,6 +3466,11 @@ impl IvmRuntime {
     /// The `ivm` schema access layer.
     pub fn metadata(&self) -> &IvmMetadata {
         &self.metadata
+    }
+
+    /// The shared right-key cache used by plain SEMI/ANTI views.
+    pub(crate) fn semi_anti_right_key_cache(&self) -> &Mutex<SemiAntiRightKeyCache> {
+        &self.semi_anti_right_keys
     }
 
     /// Create the `ivm` schema and tables if they do not exist.

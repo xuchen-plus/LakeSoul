@@ -718,6 +718,7 @@ impl IvmTable {
             .iter()
             .chain(extra)
             .chain(self.range_partition_columns.iter())
+            .chain(self.bucket_columns.iter())
         {
             names.insert(name.clone());
         }
