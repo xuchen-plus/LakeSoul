@@ -150,6 +150,15 @@ struct CachedMultiAgg {
     aggregates: Vec<MultiAggSpec>,
 }
 
+/// Caches shared by the two analyses of one statement (the probe and the
+/// widened state) and by the split-target path.
+#[derive(Default)]
+struct DerivedCaches {
+    derived: HashMap<String, CachedDerived>,
+    multi_agg: HashMap<MultiAggKey, CachedMultiAgg>,
+    rows: HashMap<String, ViewSpec>,
+}
+
 fn multi_agg_key(spec: &ViewSpec) -> Option<MultiAggKey> {
     let ViewSpec::MultiAgg {
         source_table_id,
@@ -392,6 +401,126 @@ fn widen_derived_join(spec: &mut ViewSpec) {
             name: names.1,
         },
     ];
+}
+
+/// The source table of a row view that is a pure identity projection.  Such a
+/// view can be skipped: a consumer may read the upstream MV directly and keep
+/// its output columns, which are a subset of the upstream schema.
+fn identity_row_source(spec: &ViewSpec) -> Option<&str> {
+    let ViewSpec::Row {
+        source_table_id,
+        output_columns,
+        output_exprs,
+        filter,
+        ..
+    } = spec
+    else {
+        return None;
+    };
+    if filter.is_some() {
+        return None;
+    }
+    for (index, expression) in output_exprs.iter().enumerate() {
+        if !expression.is_empty()
+            && output_columns
+                .get(index)
+                .is_none_or(|column| column != expression)
+        {
+            return None;
+        }
+    }
+    Some(source_table_id)
+}
+
+/// Replace row-view sources of a consumer with the row's upstream table.  The
+/// row is a projection, so the consumer's referenced columns still resolve;
+/// the caller validates the expected schema and reverts on a mismatch.
+fn inline_identity_rows(
+    spec: &mut ViewSpec,
+    rows: &HashMap<String, ViewSpec>,
+) -> Vec<String> {
+    let mut replaced = Vec::new();
+    let mut inline = |table_id: &mut String| {
+        let Some(source) = rows.get(table_id.as_str()).and_then(identity_row_source)
+        else {
+            return;
+        };
+        let source = source.to_string();
+        replaced.push(std::mem::replace(table_id, source));
+    };
+    match spec {
+        ViewSpec::LookupJoin {
+            left_table_id,
+            right_table_id,
+            ..
+        }
+        | ViewSpec::LeftJoin {
+            left_table_id,
+            right_table_id,
+            ..
+        }
+        | ViewSpec::FullJoin {
+            left_table_id,
+            right_table_id,
+            ..
+        }
+        | ViewSpec::Join {
+            left_table_id,
+            right_table_id,
+            ..
+        } => {
+            inline(left_table_id);
+            inline(right_table_id);
+        }
+        ViewSpec::MultiAgg {
+            source_table_id, ..
+        }
+        | ViewSpec::SumCount {
+            source_table_id, ..
+        }
+        | ViewSpec::MinMax {
+            source_table_id, ..
+        }
+        | ViewSpec::DistinctAgg {
+            source_table_id, ..
+        }
+        | ViewSpec::Variance {
+            source_table_id, ..
+        }
+        | ViewSpec::Median {
+            source_table_id, ..
+        }
+        | ViewSpec::BoolAgg {
+            source_table_id, ..
+        }
+        | ViewSpec::StringAgg {
+            source_table_id, ..
+        }
+        | ViewSpec::ArrayAgg {
+            source_table_id, ..
+        }
+        | ViewSpec::ApproxDistinct {
+            source_table_id, ..
+        }
+        | ViewSpec::ApproxPercentile {
+            source_table_id, ..
+        }
+        | ViewSpec::ComputedAgg {
+            source_table_id, ..
+        }
+        | ViewSpec::Window {
+            source_table_id, ..
+        }
+        | ViewSpec::SemiAnti {
+            left_table_id: source_table_id,
+            ..
+        }
+        | ViewSpec::TopK {
+            source_table_id, ..
+        } => inline(source_table_id),
+        _ => {}
+    }
+    replaced
 }
 
 /// The subplan of a derived source in an analyzer error, if any.
@@ -949,8 +1078,7 @@ impl IvmSqlExecutor {
         // still run before the target itself is touched.
         let mut derived = Vec::new();
         let mut deferred = Vec::new();
-        let mut derived_cache = HashMap::new();
-        let mut multi_agg_cache = HashMap::new();
+        let mut caches = DerivedCaches::default();
         let analyzed = self
             .analyze_with_derived(
                 &plan,
@@ -959,8 +1087,7 @@ impl IvmSqlExecutor {
                 &mv,
                 &mut derived,
                 &mut deferred,
-                &mut derived_cache,
-                &mut multi_agg_cache,
+                &mut caches,
             )
             .await;
         let (probe, fallback, expected, plan) = match analyzed {
@@ -1028,7 +1155,7 @@ impl IvmSqlExecutor {
                     insert.overwrite,
                     derived,
                     deferred,
-                    multi_agg_cache,
+                    caches,
                 )
                 .await;
         }
@@ -1106,8 +1233,7 @@ impl IvmSqlExecutor {
                         &mv,
                         &mut derived,
                         &mut deferred,
-                        &mut derived_cache,
-                        &mut multi_agg_cache,
+                        &mut caches,
                     )
                     .await?
                     .0
@@ -1277,7 +1403,7 @@ impl IvmSqlExecutor {
         overwrite: bool,
         mut derived: Vec<String>,
         mut deferred: Vec<String>,
-        mut multi_agg_cache: HashMap<MultiAggKey, CachedMultiAgg>,
+        mut caches: DerivedCaches,
     ) -> Result<IvmExecution> {
         if self.refresh_upstream {
             let roots = tables
@@ -1297,7 +1423,6 @@ impl IvmSqlExecutor {
             state_table_id: Some(STATE_PLACEHOLDER.to_string()),
             derived: true,
         };
-        let mut derived_cache = HashMap::new();
         let (state_spec, _) = self
             .analyze_with_derived(
                 &plan,
@@ -1306,8 +1431,7 @@ impl IvmSqlExecutor {
                 target,
                 &mut derived,
                 &mut deferred,
-                &mut derived_cache,
-                &mut multi_agg_cache,
+                &mut caches,
             )
             .await?;
         let expected = expected_mv_schema(&state_spec, &tables)?;
@@ -1673,8 +1797,7 @@ impl IvmSqlExecutor {
         target: &IvmTable,
         steps: &mut Vec<String>,
         deferred: &mut Vec<String>,
-        cache: &mut HashMap<String, CachedDerived>,
-        multi_agg_cache: &mut HashMap<MultiAggKey, CachedMultiAgg>,
+        caches: &mut DerivedCaches,
     ) -> Result<(ViewSpec, LogicalPlan)> {
         let mut plan = plan.clone();
         loop {
@@ -1694,22 +1817,16 @@ impl IvmSqlExecutor {
                         .attach(UnsupportedShape));
                     }
                     let key = plan_key(&source);
-                    let reused = cache.get(&key).cloned();
+                    let reused = caches.derived.get(&key).cloned();
                     let (table, view_id, mapping, fresh) = match reused {
                         Some(step) => (step.table, step.view_id, step.mapping, false),
                         None => {
                             let (table, view_id, mapping) = self
                                 .materialize_derived(
-                                    &source,
-                                    target,
-                                    tables,
-                                    steps,
-                                    deferred,
-                                    cache,
-                                    multi_agg_cache,
+                                    &source, target, tables, steps, deferred, caches,
                                 )
                                 .await?;
-                            cache.insert(
+                            caches.derived.insert(
                                 key,
                                 CachedDerived {
                                     table: table.clone(),
@@ -1747,8 +1864,7 @@ impl IvmSqlExecutor {
         tables: &mut HashMap<String, IvmTable>,
         steps: &mut Vec<String>,
         deferred: &mut Vec<String>,
-        cache: &mut HashMap<String, CachedDerived>,
-        multi_agg_cache: &mut HashMap<MultiAggKey, CachedMultiAgg>,
+        caches: &mut DerivedCaches,
     ) -> Result<(IvmTable, String, Vec<(String, String)>)> {
         derived_step_supported(subplan)?;
         let request = AnalyzeRequest {
@@ -1760,14 +1876,7 @@ impl IvmSqlExecutor {
         // The subplan may itself need derived views; they are materialized
         // first and take the lower step indices.
         let (mut spec, _) = Box::pin(self.analyze_with_derived(
-            subplan,
-            tables,
-            &request,
-            target,
-            steps,
-            deferred,
-            cache,
-            multi_agg_cache,
+            subplan, tables, &request, target, steps, deferred, caches,
         ))
         .await?;
         // A derived outer-join step gets a non-null row identity, so a
@@ -1783,7 +1892,7 @@ impl IvmSqlExecutor {
         // their normalized specs are identical, so reuse the step table (and
         // skip creating a new one).
         let spec_key = format!("spec:{}", definition_hash(&spec)?);
-        if let Some(step) = cache.get(&spec_key).cloned() {
+        if let Some(step) = caches.derived.get(&spec_key).cloned() {
             let mapping = derived_output_mapping(&spec, subplan)?;
             return Ok((step.table, step.view_id, mapping));
         }
@@ -1800,12 +1909,28 @@ impl IvmSqlExecutor {
                 .attach(UnsupportedShape));
             }
         }
+        // A pure identity row step can be skipped: let this consumer read the
+        // row's upstream MV directly, and remove the row from the deferred
+        // refresh set.  The expected schema check makes the rewrite safe.
+        let before_inline = spec.clone();
+        let before_schema = schema.clone();
+        let replaced_rows = inline_identity_rows(&mut spec, &caches.rows);
+        if !replaced_rows.is_empty() {
+            let after_schema = expected_mv_schema(&spec, tables)?;
+            if schema_matches(after_schema.as_ref(), before_schema.as_ref()) {
+                for row_id in replaced_rows {
+                    deferred.retain(|view_id| view_id != &row_id);
+                }
+            } else {
+                spec = before_inline;
+            }
+        }
         let index = steps.len();
         let original_spec = spec.clone();
         let merge_key = multi_agg_key(&original_spec);
         let merge_owner = merge_key
             .as_ref()
-            .and_then(|key| multi_agg_cache.get(key))
+            .and_then(|key| caches.multi_agg.get(key))
             .cloned();
         let merged = merge_owner.as_ref().and_then(|owner| {
             merge_multi_agg_row(
@@ -1847,7 +1972,8 @@ impl IvmSqlExecutor {
             && having.is_none()
             && having_lookup.is_none()
         {
-            multi_agg_cache
+            caches
+                .multi_agg
                 .entry(key)
                 .or_insert_with(|| CachedMultiAgg {
                     table: table.clone(),
@@ -1855,6 +1981,9 @@ impl IvmSqlExecutor {
                 });
         }
         spec.set_derived_identity(&view_id, &view_id)?;
+        if matches!(spec, ViewSpec::Row { .. }) {
+            caches.rows.insert(view_id.clone(), spec.clone());
+        }
         // A `MIN`/`MAX` or `DISTINCT` aggregate step carries its own
         // value-count state table, created next to the step MV.
         if needs_state_table(&spec)
@@ -1883,7 +2012,7 @@ impl IvmSqlExecutor {
                 .set_view_definition(&view_id, &definition, "")
                 .await?;
         }
-        cache.insert(
+        caches.derived.insert(
             spec_key,
             CachedDerived {
                 table: table.clone(),
@@ -3570,6 +3699,57 @@ mod tests {
         assert_eq!(output_columns, ["g", "sum_v"]);
         assert_eq!(output_exprs, ["g", "net_v"]);
         assert!(filter.unwrap().contains("net_v"));
+    }
+
+    #[test]
+    fn recognizes_an_identity_row_and_inlines_its_source() {
+        let row: ViewSpec = serde_json::from_value(serde_json::json!({
+            "kind": "row",
+            "view_id": "row_view",
+            "source_table_id": "upstream",
+            "mv_table_id": "row_view",
+            "output_columns": ["g", "v"],
+            "output_exprs": ["g", "v"],
+        }))
+        .unwrap();
+        assert_eq!(identity_row_source(&row), Some("upstream"));
+
+        let mut consumer: ViewSpec = serde_json::from_value(serde_json::json!({
+            "kind": "multi_agg",
+            "view_id": "consumer",
+            "source_table_id": "row_view",
+            "mv_table_id": "consumer",
+            "group_keys": ["g"],
+            "aggregates": [{
+                "call": "sum(v)",
+                "column": "sum_v",
+                "result": "int64",
+            }],
+        }))
+        .unwrap();
+        let rows = HashMap::from([("row_view".to_string(), row)]);
+        assert_eq!(inline_identity_rows(&mut consumer, &rows), ["row_view"]);
+        let ViewSpec::MultiAgg {
+            source_table_id, ..
+        } = consumer
+        else {
+            panic!("expected a multi aggregate");
+        };
+        assert_eq!(source_table_id, "upstream");
+    }
+
+    #[test]
+    fn keeps_a_filtering_row_as_a_source() {
+        let row: ViewSpec = serde_json::from_value(serde_json::json!({
+            "kind": "row",
+            "view_id": "row_view",
+            "source_table_id": "upstream",
+            "mv_table_id": "row_view",
+            "output_columns": ["g", "v"],
+            "filter": "v <> 0",
+        }))
+        .unwrap();
+        assert!(identity_row_source(&row).is_none());
     }
 
     #[test]
