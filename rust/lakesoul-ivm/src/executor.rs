@@ -760,6 +760,7 @@ impl IvmSqlExecutor {
         // derived steps are idempotent by name, while the target checks below
         // still run before the target itself is touched.
         let mut derived = Vec::new();
+        let mut deferred = Vec::new();
         let mut derived_cache = HashMap::new();
         let analyzed = self
             .analyze_with_derived(
@@ -768,6 +769,7 @@ impl IvmSqlExecutor {
                 &request,
                 &mv,
                 &mut derived,
+                &mut deferred,
                 &mut derived_cache,
             )
             .await;
@@ -835,6 +837,7 @@ impl IvmSqlExecutor {
                     sql,
                     insert.overwrite,
                     derived,
+                    deferred,
                 )
                 .await;
         }
@@ -911,6 +914,7 @@ impl IvmSqlExecutor {
                         &request,
                         &mv,
                         &mut derived,
+                        &mut deferred,
                         &mut derived_cache,
                     )
                     .await?
@@ -935,6 +939,13 @@ impl IvmSqlExecutor {
         // statement only reads their current state; with the opt-in flag the
         // views it reads are brought up to date first, in one traversal (the
         // policy retries, rebuilds and marks a stuck view dirty).
+        if fallback {
+            // A fallback statement recomputes its whole output; the derived
+            // steps of a failed analysis are not part of its definition.
+            deferred.clear();
+        } else {
+            self.flush_deferred(&mut deferred).await?;
+        }
         if self.refresh_upstream {
             let roots = tables
                 .values()
@@ -1073,6 +1084,7 @@ impl IvmSqlExecutor {
         sql: &str,
         overwrite: bool,
         mut derived: Vec<String>,
+        mut deferred: Vec<String>,
     ) -> Result<IvmExecution> {
         if self.refresh_upstream {
             let roots = tables
@@ -1100,6 +1112,7 @@ impl IvmSqlExecutor {
                 &request,
                 target,
                 &mut derived,
+                &mut deferred,
                 &mut derived_cache,
             )
             .await?;
@@ -1197,6 +1210,7 @@ impl IvmSqlExecutor {
         let same_state = stored_state
             .as_ref()
             .is_some_and(|(hash, _)| hash == &state_definition);
+        self.flush_deferred(&mut deferred).await?;
         let state_dirty = self
             .runtime
             .metadata()
@@ -1439,6 +1453,22 @@ impl IvmSqlExecutor {
         self.runtime.create_table(options).await
     }
 
+    /// Refresh the derived views whose unchanged definitions were deferred
+    /// during analysis.  The chain scheduler discovers their dependencies and
+    /// runs independent views concurrently (see `LAKESOUL_IVM_VIEW_PARALLELISM`).
+    async fn flush_deferred(&self, deferred: &mut Vec<String>) -> Result<()> {
+        if deferred.is_empty() {
+            return Ok(());
+        }
+        let roots = std::mem::take(deferred);
+        let refreshed = self
+            .runtime
+            .refresh_view_chains(&roots, &ChainPolicy::default())
+            .await?;
+        tracing::debug!(views = refreshed.len(), "deferred derived views refreshed");
+        Ok(())
+    }
+
     /// Analyze `plan`, materializing the derived views its compound sources
     /// need (bottom-up), and return the outer spec with the rewritten plan.
     async fn analyze_with_derived(
@@ -1448,6 +1478,7 @@ impl IvmSqlExecutor {
         request: &AnalyzeRequest,
         target: &IvmTable,
         steps: &mut Vec<String>,
+        deferred: &mut Vec<String>,
         cache: &mut HashMap<String, CachedDerived>,
     ) -> Result<(ViewSpec, LogicalPlan)> {
         let mut plan = plan.clone();
@@ -1474,7 +1505,7 @@ impl IvmSqlExecutor {
                         None => {
                             let (table, view_id, mapping) = self
                                 .materialize_derived(
-                                    &source, target, tables, steps, cache,
+                                    &source, target, tables, steps, deferred, cache,
                                 )
                                 .await?;
                             cache.insert(
@@ -1514,6 +1545,7 @@ impl IvmSqlExecutor {
         target: &IvmTable,
         tables: &mut HashMap<String, IvmTable>,
         steps: &mut Vec<String>,
+        deferred: &mut Vec<String>,
         cache: &mut HashMap<String, CachedDerived>,
     ) -> Result<(IvmTable, String, Vec<(String, String)>)> {
         derived_step_supported(subplan)?;
@@ -1525,9 +1557,9 @@ impl IvmSqlExecutor {
         };
         // The subplan may itself need derived views; they are materialized
         // first and take the lower step indices.
-        let (mut spec, _) = Box::pin(
-            self.analyze_with_derived(subplan, tables, &request, target, steps, cache),
-        )
+        let (mut spec, _) = Box::pin(self.analyze_with_derived(
+            subplan, tables, &request, target, steps, deferred, cache,
+        ))
         .await?;
         // A derived outer-join step gets a non-null row identity, so a
         // consumer can read its MV as a keyed source; the keys must be
@@ -1580,8 +1612,16 @@ impl IvmSqlExecutor {
         let same_definition =
             stored.as_ref().is_some_and(|(hash, _)| hash == &definition);
         if same_definition {
-            self.runtime.refresh_spec(&spec).await?;
+            // Defer the incremental refresh to the chain scheduler: all
+            // derived steps of this statement are materialized first, then
+            // refreshed together in dependency order and in parallel.
+            if !deferred.contains(&view_id) {
+                deferred.push(view_id.clone());
+            }
         } else {
+            // A changed definition must see current upstreams; flush the
+            // deferred steps before rebuilding it.
+            self.flush_deferred(deferred).await?;
             self.runtime.rebuild_spec(&spec).await?;
             self.runtime
                 .metadata()
