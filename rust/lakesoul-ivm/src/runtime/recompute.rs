@@ -4292,9 +4292,27 @@ impl IvmRuntime {
         };
         let src = project_frame(state_rows, &state_fields)?;
         context.register_table("src", src.into_view())?;
-        crate::observability::note_full_scan(&view.mv.table_name);
-        context.register_table("mv", Arc::new(self.table_provider(&view.mv)))?;
         let parts = view.parts()?;
+        // The row-state refresh already knows the affected groups.  When the
+        // MV is keyed by exactly those groups and there is no lookup column,
+        // probe only those rows instead of scanning the whole MV for the
+        // delete/insert sides.
+        if parts.lookup.is_none() && view.mv.primary_keys == view.group_keys {
+            let mv_rows = self
+                .lookup_source_by_join_keys(
+                    &context,
+                    &view.mv,
+                    affected.clone(),
+                    &view.group_keys,
+                    &view.group_keys,
+                    true,
+                )
+                .await?;
+            context.register_table("mv", mv_rows.into_view())?;
+        } else {
+            crate::observability::note_full_scan(&view.mv.table_name);
+            context.register_table("mv", Arc::new(self.table_provider(&view.mv)))?;
+        }
         // A bootstrap writes only inserts into an empty MV: the delete side
         // and its key ordering are unnecessary, and the global ORDER BY would
         // sort the whole result in one plan.  Rebuild SQL streams the same
