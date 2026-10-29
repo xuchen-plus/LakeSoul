@@ -17,8 +17,8 @@ use datafusion::datasource::memory::MemTable;
 use datafusion::prelude::SessionContext;
 use lakesoul_ivm::{
     IVM_ROW_KINDS_COLUMN, IvmRuntime, IvmTable, IvmTableOptions, JoinKeyExprs,
-    LookupJoinView, MultiLookupColumn, MultiLookupJoinView, lookup_join_view_schema_for,
-    multi_lookup_join_mv_schema_for,
+    LookupJoinView, MultiLookupColumn, MultiLookupJoinView, StateRole,
+    lookup_join_view_schema_for, multi_lookup_join_mv_schema_for,
 };
 use tempfile::tempdir;
 
@@ -794,6 +794,20 @@ async fn multi_lookup_join_refreshes_every_right_source() {
         multi_lookup_rows(runtime, output).await,
         full_multi_lookup_rows(runtime, left, first, second).await
     );
+
+    // The join-key index only stores the left identity and keys: the right
+    // payload must not be copied into the side state.
+    let state = runtime
+        .metadata()
+        .list_states(&view.view_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|state| state.role == StateRole::JoinLeft)
+        .expect("multi lookup join state");
+    let state_table = runtime.open_table_by_id(&state.table_id).await.unwrap();
+    assert!(state_table.schema.field_with_name("id").is_ok());
+    assert!(state_table.schema.field_with_name("lv").is_err());
 
     // A left-only update must keep both right payloads.
     left.append_batch(

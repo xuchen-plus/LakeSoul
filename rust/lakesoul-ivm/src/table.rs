@@ -707,6 +707,41 @@ impl IvmTable {
         create_writer_with_io_config(self.writer_builder().build()).await
     }
 
+    /// A clone of this table with a projected schema, for an auxiliary state
+    /// that only needs the primary key, join keys, change marker and range
+    /// partition columns.  Reads through the clone push the projection into the
+    /// native reader instead of materializing every source column.
+    pub(crate) fn projected_state_source(&self, extra: &[String]) -> Result<Self> {
+        let mut names = std::collections::HashSet::new();
+        for name in self
+            .primary_keys
+            .iter()
+            .chain(extra)
+            .chain(self.range_partition_columns.iter())
+        {
+            names.insert(name.clone());
+        }
+        if let Some(column) = &self.cdc_column {
+            names.insert(column.clone());
+        }
+        for column in [IVM_ROW_KINDS_COLUMN, IVM_EPOCH_COLUMN] {
+            if self.schema.field_with_name(column).is_ok() {
+                names.insert(column.to_string());
+            }
+        }
+        let fields = self
+            .schema
+            .fields()
+            .iter()
+            .filter(|field| names.contains(field.name().as_str()))
+            .map(|field| Arc::new(field.as_ref().clone()))
+            .collect::<Vec<_>>();
+        let schema = Arc::new(Schema::new(fields));
+        let mut projected = self.clone();
+        projected.schema = schema;
+        Ok(projected)
+    }
+
     /// Convert writer outputs to metadata file entries and record metrics.
     pub(crate) fn output_files(
         &self,
