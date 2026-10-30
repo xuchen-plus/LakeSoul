@@ -2133,6 +2133,51 @@ fn window_rank_columns(
         .collect())
 }
 
+/// Default memory budget for one materialized top-k frame.
+const TOP_K_MATERIALIZE_BYTES: usize = 1024 * 1024 * 1024;
+
+/// Materialize a top-k frame for reuse, but stop at a memory budget.
+///
+/// `mv` and `before` are each consumed by several plan branches.  Keeping
+/// them lazy re-runs the same keyed lookup, so the refresh materializes them
+/// by default.  A large window could otherwise pin the whole frame in memory:
+/// once the budget is crossed, drop the partial result and let the caller use
+/// the lazy frame again.  The budget is per frame and overridable with
+/// `LAKESOUL_IVM_TOPK_MATERIALIZE_BYTES`; `0` disables materialization.
+async fn materialize_top_k_frame(
+    frame: DataFrame,
+    label: &'static str,
+) -> Result<Option<Vec<RecordBatch>>> {
+    use futures::StreamExt;
+    let limit = std::env::var("LAKESOUL_IVM_TOPK_MATERIALIZE_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(TOP_K_MATERIALIZE_BYTES);
+    if limit == 0 {
+        return Ok(None);
+    }
+    let mut stream = frame.execute_stream().await?;
+    let mut batches = Vec::new();
+    let mut bytes = 0usize;
+    while let Some(batch) = stream.next().await {
+        let batch = batch?;
+        bytes += batch.get_array_memory_size();
+        if bytes > limit {
+            tracing::warn!(
+                label,
+                limit,
+                bytes,
+                "top-k materialization budget exceeded; falling back to lazy scan"
+            );
+            return Ok(None);
+        }
+        batches.push(batch);
+    }
+    let rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+    tracing::debug!(label, bytes, rows, "top-k frame materialized");
+    Ok(Some(batches))
+}
+
 fn top_k_rank_columns(view: &TopKView, context: &SessionContext) -> Result<Vec<String>> {
     let mut columns = view.source.primary_keys.clone();
     for column in top_k_output_columns(view)
@@ -3633,11 +3678,10 @@ impl IvmRuntime {
         // Keep only the rank columns and materialize the rows once.
         let before = project_frame(before, &rank_columns)?;
         let before = filter_deletes(before, change_column(&view.source))?;
-        let before_batches = before.clone().collect().await?;
-        let before = if before_batches.is_empty() {
-            before
-        } else {
-            context.read_batches(before_batches)?
+        let before = match materialize_top_k_frame(before.clone(), "top-k before").await?
+        {
+            Some(batches) if !batches.is_empty() => context.read_batches(batches)?,
+            _ => before,
         };
         if let Some(rank) = &rank_state {
             let change = change_column(&view.source).unwrap_or(IVM_ROW_KINDS_COLUMN);
@@ -3746,11 +3790,9 @@ impl IvmRuntime {
         let mv = if view.group_keys.is_empty() {
             mv
         } else {
-            let mv_batches = mv.clone().collect().await?;
-            if mv_batches.is_empty() {
-                mv
-            } else {
-                context.read_batches(mv_batches)?
+            match materialize_top_k_frame(mv.clone(), "top-k mv").await? {
+                Some(batches) if !batches.is_empty() => context.read_batches(batches)?,
+                _ => mv,
             }
         };
         context.register_table("mv", mv.clone().into_view())?;
@@ -3895,19 +3937,14 @@ impl IvmRuntime {
             .await?
         } else {
             // Execute the refresh SQL once and feed both the MV and its mirror
-            // state from the same batches.  Two independent streams re-ran
+            // state from the same stream.  Two independent streams re-ran
             // every keyed lookup inside the plan (including before-image).
-            let batches = frame.collect().await?;
-            phase_done!("sql_collect");
-            futures::future::try_join(
-                view.mv.append_batches(&self.client, batches.clone()),
-                async {
-                    let ids = state.append_batches(&self.client, batches).await?;
-                    self.checkpoint_epoch_states(&record).await?;
-                    Ok::<_, rootcause::Report>(ids)
-                },
-            )
-            .await?
+            let (mv_ids, state_ids) = view
+                .mv
+                .append_stream_pair(&self.client, frame.execute_stream().await?, &state)
+                .await?;
+            self.checkpoint_epoch_states(&record).await?;
+            (mv_ids, state_ids)
         };
         commit_ids.extend(mv_ids);
         commit_ids.extend(state_ids);

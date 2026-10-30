@@ -1005,6 +1005,58 @@ impl IvmTable {
         self.commit_files(client, files).await
     }
 
+    /// Publish one refresh output stream to this table and a mirror table.
+    ///
+    /// A top-k refresh writes the same delete/insert frame to its MV and to
+    /// the mirror state.  Pull the source stream once, coalesce it once, and
+    /// hand each batch to both writers; cloning a `RecordBatch` only clones
+    /// its `Arc` buffers.  Memory stays at one writer batch instead of the
+    /// whole result set.
+    pub(crate) async fn append_stream_pair<S>(
+        &self,
+        client: &MetaDataClient,
+        stream: S,
+        other: &IvmTable,
+    ) -> Result<(Vec<String>, Vec<String>)>
+    where
+        S: futures::Stream<Item = datafusion::error::Result<RecordBatch>> + Send + Unpin,
+    {
+        use futures::StreamExt;
+        let mut stream = Box::pin(coalesce_batch_stream(
+            stream,
+            self.clone(),
+            APPEND_COALESCE_ROWS,
+        ));
+        let mut writer = self.writer().await?;
+        let mut other_writer = other.writer().await?;
+        let mut rows = 0u64;
+        while let Some(batch) = stream.next().await {
+            let batch = batch
+                .map_err(|error| rootcause::report!("refresh output batch: {error}"))?;
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            let mine = self.cast_batch(batch.clone())?;
+            let theirs = other.cast_batch(batch)?;
+            rows += mine.num_rows() as u64;
+            let started = Instant::now();
+            writer.write_record_batch(mine).await?;
+            crate::observability::add_write_time(started.elapsed());
+            let started = Instant::now();
+            other_writer.write_record_batch(theirs).await?;
+            crate::observability::add_write_time(started.elapsed());
+        }
+        let started = Instant::now();
+        let outputs = writer.flush_and_close().await?;
+        let other_outputs = other_writer.flush_and_close().await?;
+        crate::observability::add_write_time(started.elapsed());
+        let files = self.output_files(outputs, rows);
+        let other_files = other.output_files(other_outputs, rows);
+        let ids = self.commit_files(client, files).await?;
+        let other_ids = other.commit_files(client, other_files).await?;
+        Ok((ids, other_ids))
+    }
+
     /// Publish a stream that is sorted by the table's primary keys, keeping
     /// all rows of one key in the same writer batch.
     ///
