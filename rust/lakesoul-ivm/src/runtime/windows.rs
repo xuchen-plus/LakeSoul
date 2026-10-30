@@ -3662,6 +3662,14 @@ impl IvmRuntime {
             super::mv_partitions_for_source(&view.mv, &view.source, &window);
         let delta =
             self.groups_table_frame(&context, &view.source, window.added_files.clone())?;
+        // The rank update and both affected-group frames reference `delta`
+        // several times.  Project it to the rank columns and keep one
+        // materialized copy, bounded by the same budget as `before`.
+        let delta = project_frame(delta, &rank_columns)?;
+        let delta = match materialize_top_k_frame(delta.clone(), "top-k delta").await? {
+            Some(batches) if !batches.is_empty() => context.read_batches(batches)?,
+            _ => delta,
+        };
         phase_done!("delta");
         let pk_exprs = view
             .source

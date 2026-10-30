@@ -6514,22 +6514,24 @@ impl IvmRuntime {
                 dataframe(&context, Vec::new(), &schema)?
             }
         };
-        let mut right_affected_keys: Option<DataFrame> = None;
-
-        for (index, (right, filter)) in view.rights.iter().enumerate() {
+        // Union the changed keys of every right before probing the left side
+        // state.  The left rows are independent of which right changed them,
+        // so one probe replaces one per right.
+        let mut changed_keys: Option<DataFrame> = None;
+        for (index, right) in view.rights.iter().enumerate() {
             if right_windows[index].added_files.is_empty() {
                 continue;
             }
             let delta = self.groups_table_frame(
                 &context,
-                right,
+                &right.0,
                 right_windows[index].added_files.clone(),
             )?;
             // The right primary key is the join key, so every affected key is
             // present in the delta itself: an update keeps its key, and a key
             // change arrives as a delete of the old key plus an insert of the
             // new one.  No before-image lookup is needed.
-            let changed_keys = delta
+            let keys = delta
                 .select(
                     view.join_keys
                         .iter()
@@ -6537,7 +6539,18 @@ impl IvmRuntime {
                         .collect::<Vec<_>>(),
                 )?
                 .distinct()?;
+            changed_keys = Some(match changed_keys {
+                Some(current) => current.union(keys)?.distinct()?,
+                None => keys,
+            });
+        }
+        let mut right_affected_keys: Option<DataFrame> = None;
+        if let Some(changed_keys) = changed_keys {
             let from_right = if left_state.is_some() {
+                let (right, filter) = view
+                    .rights
+                    .first()
+                    .expect("multi lookup join has at least one right");
                 let probe_view =
                     self.multi_lookup_probe(view, &state_source, right, filter.clone());
                 let probe = lookup_join_probe(&probe_view);
@@ -6564,10 +6577,7 @@ impl IvmRuntime {
             };
             let from_right = from_right.select(pk_exprs.clone())?.distinct()?;
             affected = affected.union(from_right.clone())?.distinct()?;
-            right_affected_keys = Some(match right_affected_keys {
-                Some(keys) => keys.union(from_right)?.distinct()?,
-                None => from_right,
-            });
+            right_affected_keys = Some(from_right);
         }
         let affected = affected.distinct()?;
         // The state is a narrow join-key -> left-PK index.  Re-read the full
