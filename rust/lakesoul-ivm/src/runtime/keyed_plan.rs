@@ -1740,6 +1740,15 @@ impl TableProvider for IvmHashJoinTable {
         _limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         let plan = self.build_plan(session).await?;
+        // Hide the join from the outer physical optimizer.  Otherwise
+        // EnforceDistribution sees the join's key-partitioned requirement and
+        // inserts another DataFusion hash repartition around it, shuffling the
+        // LakeSoul buckets and (worse) changing the join's partition layout.
+        // Coalesce only the output; the join still runs every bucket
+        // internally.
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(IvmHiddenPlanExec::new(Arc::new(
+            CoalescePartitionsExec::new(plan),
+        )));
         let Some(projection) = projection else {
             return Ok(plan);
         };

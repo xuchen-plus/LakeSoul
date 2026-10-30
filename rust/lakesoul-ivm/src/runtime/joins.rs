@@ -3775,13 +3775,56 @@ impl IvmRuntime {
         Err(report!("right join state lookup is unavailable"))
     }
 
+    /// Row count and NULL presence from physical-plan statistics.
+    ///
+    /// The hash-join decision must not execute the contribution: an indexed
+    /// key lookup is already cheap, and counting the keys would double the
+    /// contribution work even when the join is not selected.  File scans
+    /// usually expose these statistics; when they do not, keep key lookup.
+    async fn frame_key_stats(
+        frame: &DataFrame,
+        columns: &[String],
+    ) -> Result<Option<(usize, bool)>> {
+        use datafusion::common::stats::Precision;
+
+        let plan = match frame.clone().create_physical_plan().await {
+            Ok(plan) => plan,
+            Err(_) => return Ok(None),
+        };
+        let stats = match plan.partition_statistics(None) {
+            Ok(stats) => stats,
+            Err(_) => return Ok(None),
+        };
+        let rows = match stats.num_rows {
+            Precision::Exact(rows) | Precision::Inexact(rows) => rows,
+            Precision::Absent => return Ok(None),
+        };
+        let mut has_null = false;
+        for column in columns {
+            let Ok(index) = plan.schema().index_of(column) else {
+                return Ok(None);
+            };
+            let Some(column_stats) = stats.column_statistics.get(index) else {
+                return Ok(None);
+            };
+            match column_stats.null_count {
+                Precision::Exact(nulls) | Precision::Inexact(nulls) if nulls > 0 => {
+                    has_null = true;
+                }
+                Precision::Exact(_) | Precision::Inexact(_) => {}
+                Precision::Absent => return Ok(None),
+            }
+        }
+        Ok(Some((rows, has_null)))
+    }
+
     /// Decide whether a source lookup should use a streaming hash join.
     ///
     /// Outer/mark lookups need unmatched contribution rows and null-safe
     /// joins need NULL keys to match; both keep the keyed lookup path.  The
     /// inner-join case only needs matched source rows, so a hash join is a
     /// safe replacement when the key set is large enough.
-    async fn hash_join_source_applies(
+    async fn hash_join_source_input(
         &self,
         contribution: &DataFrame,
         table: &IvmTable,
@@ -3789,46 +3832,40 @@ impl IvmRuntime {
         bucket_count: usize,
         input_columns: &[String],
         multi_match: bool,
-    ) -> Result<bool> {
-        if !multi_match {
-            return Ok(false);
+    ) -> Result<Option<DataFrame>> {
+        if !multi_match || input_columns.is_empty() {
+            return Ok(None);
         }
         let mode = std::env::var("LAKESOUL_IVM_HASH_JOIN").unwrap_or_default();
         if matches!(mode.as_str(), "off" | "0" | "false") {
-            return Ok(false);
+            return Ok(None);
         }
         if table.table_name.contains("__ivm_topk_state")
             || table.table_name.contains("__ivm_topk_rank_table")
         {
-            return Ok(false);
-        }
-        if matches!(mode.as_str(), "on" | "1" | "true") {
-            return Ok(true);
+            return Ok(None);
         }
         if groups_by_bucket
             .iter()
             .all(|groups| groups.iter().all(|group| group.files.is_empty()))
         {
-            return Ok(false);
+            return Ok(None);
         }
+        // Only the join-key columns are needed; the hash join projects the
+        // state side.
         let key_columns = input_columns
             .iter()
             .map(|column| column_expr(column))
             .collect::<Vec<_>>();
         let keys = contribution.clone().select(key_columns)?;
-        let batches = keys.collect().await?;
-        let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
-        if rows < 32_000 {
-            return Ok(false);
+        if matches!(mode.as_str(), "on" | "1" | "true") {
+            return Ok(Some(keys));
         }
-        // NULL keys make SQL equality and NULL-safe equality differ.  The
-        // keyed lookup preserves the view's null handling, so fall back.
-        if batches
-            .iter()
-            .any(|batch| batch.columns().iter().any(|column| column.null_count() > 0))
-        {
-            return Ok(false);
-        }
+        // Large source/MV lookups are indexed random reads.  Per-step
+        // measurements on the 10M pilot show that a full-state scan only wins
+        // for very small state tables; large 6M-row MVs are 2-5x faster
+        // through the keyed lookup at 50k-235k keys.  Check the state size
+        // before doing any contribution work.
         let Some(bytes) =
             groups_by_bucket
                 .iter()
@@ -3840,13 +3877,34 @@ impl IvmRuntime {
                     })
                 })
         else {
-            return Ok(rows >= 100_000);
+            return Ok(None);
         };
+        let state_mb = bytes as f64 / 1_000_000.0;
+        if state_mb > 16.0 {
+            return Ok(None);
+        }
+        let (rows, has_null) = match Self::frame_key_stats(&keys, input_columns).await? {
+            Some(stats) => stats,
+            None => {
+                // Statistics are absent on some derived contributions.  For
+                // a small state it is still worth executing the key frame
+                // once; large states already took the keyed lookup path.
+                let batches = keys.clone().collect().await?;
+                let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+                let has_null = batches.iter().any(|batch| {
+                    batch.columns().iter().any(|column| column.null_count() > 0)
+                });
+                (rows, has_null)
+            }
+        };
+        if rows < 200_000 || has_null {
+            return Ok(None);
+        }
         let parallel = bucket_count
             .min(super::keyed_plan::max_active_tasks())
             .max(1) as f64;
         let key_ms = rows as f64 * 0.177 / parallel;
-        let join_ms = bytes as f64 / 1_000_000.0 / 180.0 * 1000.0 + 500.0;
+        let join_ms = state_mb / 180.0 * 1000.0 + 500.0;
         let applies = key_ms > join_ms * 1.5;
         tracing::debug!(
             table = %table.table_name,
@@ -3858,7 +3916,7 @@ impl IvmRuntime {
             applies,
             "hash join source lookup decision"
         );
-        Ok(applies)
+        if applies { Ok(Some(keys)) } else { Ok(None) }
     }
 
     /// Decide whether a side-state lookup should use a streaming hash join.
@@ -3869,16 +3927,16 @@ impl IvmRuntime {
     /// lookup costs about 0.177ms of wall time per key (before dividing by
     /// the bucket parallelism), and a hash join scans state at about
     /// 180MB/s plus a 0.5s hash build.
-    async fn hash_join_state_applies(
+    async fn hash_join_state_input(
         &self,
         contribution: &DataFrame,
         state: &IvmTable,
         groups_by_bucket: &[Vec<super::PartitionFiles>],
         bucket_count: usize,
-    ) -> Result<bool> {
+    ) -> Result<Option<DataFrame>> {
         let mode = std::env::var("LAKESOUL_IVM_HASH_JOIN").unwrap_or_default();
         if matches!(mode.as_str(), "off" | "0" | "false") {
-            return Ok(false);
+            return Ok(None);
         }
         // Top-k rank state is probed many times per refresh with a small key
         // set.  A full-state hash join per probe is much more expensive than
@@ -3886,20 +3944,33 @@ impl IvmRuntime {
         if state.table_name.contains("__ivm_topk_state")
             || state.table_name.contains("__ivm_topk_rank_table")
         {
-            return Ok(false);
-        }
-        if matches!(mode.as_str(), "on" | "1" | "true") {
-            return Ok(true);
+            return Ok(None);
         }
         if groups_by_bucket
             .iter()
             .all(|groups| groups.iter().all(|group| group.files.is_empty()))
         {
-            return Ok(false);
+            return Ok(None);
         }
-        let rows = super::count_frame_rows(contribution.clone()).await? as f64;
-        if rows < 32_000.0 {
-            return Ok(false);
+        let key = column_expr(super::join_state::IVM_JOIN_KEY_COLUMN);
+        let keys = contribution.clone().select(vec![key])?;
+        if matches!(mode.as_str(), "on" | "1" | "true") {
+            return Ok(Some(keys));
+        }
+        let (rows, _) = match Self::frame_key_stats(
+            &keys,
+            &[super::join_state::IVM_JOIN_KEY_COLUMN.to_string()],
+        )
+        .await?
+        {
+            Some(stats) => stats,
+            None => {
+                let batches = keys.clone().collect().await?;
+                (batches.iter().map(|batch| batch.num_rows()).sum(), false)
+            }
+        };
+        if rows < 32_000 {
+            return Ok(None);
         }
         let Some(bytes) =
             groups_by_bucket
@@ -3912,12 +3983,12 @@ impl IvmRuntime {
                     })
                 })
         else {
-            return Ok(rows >= 100_000.0);
+            return Ok(None);
         };
         let parallel = bucket_count
             .min(super::keyed_plan::max_active_tasks())
             .max(1) as f64;
-        let key_ms = rows * 0.177 / parallel;
+        let key_ms = rows as f64 * 0.177 / parallel;
         let join_ms = bytes as f64 / 1_000_000.0 / 180.0 * 1000.0 + 500.0;
         let applies = key_ms > join_ms * 1.5;
         tracing::debug!(
@@ -3930,7 +4001,7 @@ impl IvmRuntime {
             applies,
             "hash join state lookup decision"
         );
-        Ok(applies)
+        if applies { Ok(Some(keys)) } else { Ok(None) }
     }
 
     /// Read left side-state rows for an already-projected join-key
@@ -3981,17 +4052,20 @@ impl IvmRuntime {
             None => left_state.current_groups(&self.client).await?,
         };
         let groups = groups_by_bucket(groups, bucket_count);
-        if allow_hash_join
+        let hash_join_input = if allow_hash_join
             && left_state.range_partition_columns.is_empty()
-            && self
-                .hash_join_state_applies(&contribution, left_state, &groups, bucket_count)
-                .await?
         {
+            self.hash_join_state_input(&contribution, left_state, &groups, bucket_count)
+                .await?
+        } else {
+            None
+        };
+        if let Some(input) = hash_join_input {
             match super::keyed_plan::hash_join_binary_state(
                 context,
                 left_state,
                 &self.client,
-                contribution.clone(),
+                input,
                 super::join_state::IVM_JOIN_KEY_COLUMN,
                 groups.clone(),
             )
@@ -4466,7 +4540,8 @@ impl IvmRuntime {
     /// Read a source/MV as the keyed state for a join.  The contribution keys
     /// are matched to real table PK columns with `arrow::Row`; bucket routing
     /// uses the table's writer bucket columns when they are part of the key.
-    pub(crate) async fn lookup_source_by_join_keys(
+    #[doc(hidden)]
+    pub async fn lookup_source_by_join_keys(
         &self,
         context: &SessionContext,
         table: &IvmTable,
@@ -4618,8 +4693,8 @@ impl IvmRuntime {
         // Large key sets are cheaper as one streaming hash join than as one
         // random PK lookup per key.  The join rebuilds its physical plan on
         // every scan, so the same logical lookup can be executed repeatedly.
-        let hash_join_frame = if self
-            .hash_join_source_applies(
+        let hash_join_input = self
+            .hash_join_source_input(
                 &routed,
                 table,
                 &groups,
@@ -4627,13 +4702,13 @@ impl IvmRuntime {
                 input_columns,
                 multi_match,
             )
-            .await?
-        {
+            .await?;
+        let hash_join_frame = if let Some(input) = hash_join_input {
             match super::keyed_plan::hash_join_source_state(
                 context,
                 table,
                 &self.client,
-                routed.clone(),
+                input,
                 input_columns,
                 table_columns,
                 route_columns.clone(),
