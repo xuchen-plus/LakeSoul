@@ -2357,6 +2357,16 @@ fn lookup_join_probe(view: &LookupJoinView) -> JoinView {
     }
 }
 
+/// Whether the right join keys are exactly the right primary key.
+///
+/// When they are, a join-key change is a primary-key change and the CDC delta
+/// carries the old key as a delete plus the new key as an insert.  The
+/// before-image lookup would only probe keys the delta already contains.
+fn join_keys_are_primary_key(join_keys: &[String], primary_keys: &[String]) -> bool {
+    join_keys.len() == primary_keys.len()
+        && join_keys.iter().all(|key| primary_keys.contains(key))
+}
+
 /// The alias of a multi-lookup right column in the join frame.
 fn multi_lookup_alias(source: usize, column: &str) -> String {
     format!("__mlj_{source}_{column}")
@@ -5921,25 +5931,21 @@ impl IvmRuntime {
             )
             .await?
         };
-        if let Some(state) = &left_state {
-            commit_ids.extend(if state.current_files(&self.client).await?.is_empty() {
+        let left_state_empty = match &left_state {
+            Some(state) => state.current_files(&self.client).await?.is_empty(),
+            None => false,
+        };
+        if left_state_empty {
+            let state = left_state.as_ref().expect("empty side state");
+            commit_ids.extend(
                 self.sync_join_side_state(
                     &view.left,
                     state,
                     &view.join_keys,
                     &view.key_exprs.left,
                 )
-                .await?
-            } else {
-                self.apply_join_side_delta(
-                    &view.left,
-                    state,
-                    &left_window,
-                    &view.join_keys,
-                    &view.key_exprs.left,
-                )
-                .await?
-            });
+                .await?,
+            );
         }
         self.checkpoint_epoch_states(&record).await?;
         let context = refresh_session();
@@ -6032,8 +6038,15 @@ impl IvmRuntime {
             }
             None => None,
         };
+        // A right row can move to another join key without a delete tombstone
+        // only when the join key is not the primary key.  When they are the
+        // same columns, the delta's delete/insert pair already carries both
+        // keys, so the 1.4M-key before-image probe would be pure overhead.
+        let right_join_keys_are_primary =
+            view.key_exprs.right.iter().all(|expr| expr.is_empty())
+                && join_keys_are_primary_key(&view.join_keys, &view.right.primary_keys);
         let changed_keys = match (changed_keys, &delta_right) {
-            (Some(current), Some(delta_right)) => {
+            (Some(current), Some(delta_right)) if !right_join_keys_are_primary => {
                 let before = self
                     .join_keys_including_before(
                         &context,
@@ -6080,6 +6093,24 @@ impl IvmRuntime {
                     true,
                 )
                 .await?;
+            // The probe reads the pre-window side state.  Drop the rows of
+            // keys the left delta already carries, otherwise the stale row
+            // and its new version both land in the output and merge-on-read
+            // may keep the stale one.
+            let from_right = match &delta_left {
+                Some(delta_left) => {
+                    let delta_pks =
+                        delta_left.clone().select(key_exprs.clone())?.distinct()?;
+                    from_right.join(
+                        delta_pks,
+                        JoinType::LeftAnti,
+                        &key_names,
+                        &key_names,
+                        None,
+                    )?
+                }
+                None => from_right,
+            };
             match &delta_left {
                 Some(delta_left) => {
                     // A computed left key was materialized for the state only;
@@ -6100,6 +6131,21 @@ impl IvmRuntime {
         if let Some(filter) = view.left_filter.as_deref() {
             left_now =
                 left_now.filter(parse_filter(&context, &view.left.schema, filter)?)?;
+        }
+        // Update the side state after the right-change probe so that probe
+        // reads the stable pre-window state; the left delta already covers
+        // every left row this window changed.
+        if !left_state_empty && let Some(state) = &left_state {
+            commit_ids.extend(
+                self.apply_join_side_delta(
+                    &view.left,
+                    state,
+                    &left_window,
+                    &view.join_keys,
+                    &view.key_exprs.left,
+                )
+                .await?,
+            );
         }
 
         // Symmetrically, a right-only change is the right delta; a left
@@ -6126,15 +6172,87 @@ impl IvmRuntime {
                 .collect::<Vec<_>>();
             let contribution = probe.select(keys)?.distinct()?;
             let right_keys = view.lookup_right_key_names();
-            self.lookup_source_by_join_keys(
-                &context,
-                &view.right,
-                contribution,
-                &view.join_keys,
-                &right_keys,
-                false,
-            )
-            .await?
+            match &delta_right {
+                Some(delta) => {
+                    // The right delta already carries the current row for
+                    // every right key this window changed.  Probe the source
+                    // only for the remaining left keys; with a 100k-item
+                    // window the delta usually covers most of them.
+                    let delta_key_exprs = view
+                        .join_keys
+                        .iter()
+                        .enumerate()
+                        .map(|(index, key)| {
+                            let expr = match view
+                                .key_exprs
+                                .right
+                                .get(index)
+                                .filter(|expr| !expr.is_empty())
+                            {
+                                Some(rendered) => context
+                                    .state()
+                                    .create_logical_expr(rendered, delta.schema())?,
+                                None => col(view.right_join_keys()[index].as_str()),
+                            };
+                            Ok(expr.alias(key.as_str()))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let delta_keys = delta.clone().select(delta_key_exprs)?.distinct()?;
+                    let missing = contribution.clone().join(
+                        delta_keys,
+                        JoinType::LeftAnti,
+                        &view
+                            .join_keys
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>(),
+                        &view
+                            .join_keys
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>(),
+                        None,
+                    )?;
+                    let from_delta =
+                        filter_deletes(delta.clone(), change_column(&view.right))?.join(
+                            contribution,
+                            JoinType::LeftSemi,
+                            &view
+                                .right_join_keys()
+                                .iter()
+                                .map(String::as_str)
+                                .collect::<Vec<_>>(),
+                            &view
+                                .join_keys
+                                .iter()
+                                .map(String::as_str)
+                                .collect::<Vec<_>>(),
+                            None,
+                        )?;
+                    let from_source = self
+                        .lookup_source_by_join_keys(
+                            &context,
+                            &view.right,
+                            missing,
+                            &view.join_keys,
+                            &right_keys,
+                            false,
+                        )
+                        .await?;
+                    from_delta.union(from_source)?
+                }
+                None => {
+                    self.lookup_source_by_join_keys(
+                        &context,
+                        &view.right,
+                        contribution,
+                        &view.join_keys,
+                        &right_keys,
+                        false,
+                    )
+                    .await?
+                }
+            }
         } else {
             self.current_table_frame(&context, &view.right)?
         };
@@ -6352,25 +6470,21 @@ impl IvmRuntime {
                 StateRole::JoinLeft,
             )
             .await?;
-        if let Some(state) = &left_state {
-            commit_ids.extend(if state.current_files(&self.client).await?.is_empty() {
+        let left_state_empty = match &left_state {
+            Some(state) => state.current_files(&self.client).await?.is_empty(),
+            None => false,
+        };
+        if left_state_empty {
+            let state = left_state.as_ref().expect("empty side state");
+            commit_ids.extend(
                 self.sync_join_side_state(
                     &state_source,
                     state,
                     &view.join_keys,
                     &JoinKeyExprs::default().left,
                 )
-                .await?
-            } else {
-                self.apply_join_side_delta(
-                    &state_source,
-                    state,
-                    &left_window,
-                    &view.join_keys,
-                    &JoinKeyExprs::default().left,
-                )
-                .await?
-            });
+                .await?,
+            );
         }
         self.checkpoint_epoch_states(&record).await?;
 
@@ -6487,6 +6601,22 @@ impl IvmRuntime {
             (None, None) => dataframe(&context, Vec::new(), &view.left.schema)?,
         };
         let left_now = filter_deletes(left_now, change_column(&view.left))?;
+        // Update the side state after the right-change probe.  The probe then
+        // reads the stable pre-window state, and the left delta already covers
+        // every left row this window changed; appending first would make the
+        // probe merge the just-written delete/insert rows for every bucket.
+        if !left_state_empty && let Some(state) = &left_state {
+            commit_ids.extend(
+                self.apply_join_side_delta(
+                    &state_source,
+                    state,
+                    &left_window,
+                    &view.join_keys,
+                    &JoinKeyExprs::default().left,
+                )
+                .await?,
+            );
+        }
         let mut right_nows = Vec::with_capacity(view.rights.len());
         for (right, filter) in &view.rights {
             let contribution = left_now
@@ -8822,5 +8952,24 @@ mod identity_encoding_tests {
             "a NULL field must change the identity: {rows:?}"
         );
         assert_ne!(rows[1], rows[2]);
+    }
+}
+
+#[cfg(test)]
+mod join_key_identity_tests {
+    use super::join_keys_are_primary_key;
+
+    #[test]
+    fn join_keys_match_primary_key_in_any_order() {
+        let join = ["order_item_id", "order_no", "src_sys"].map(str::to_string);
+        let primary = ["src_sys", "order_no", "order_item_id"].map(str::to_string);
+        assert!(join_keys_are_primary_key(&join, &primary));
+    }
+
+    #[test]
+    fn join_key_subset_is_not_the_primary_key() {
+        let join = ["order_no", "src_sys"].map(str::to_string);
+        let primary = ["src_sys", "order_no", "order_item_id"].map(str::to_string);
+        assert!(!join_keys_are_primary_key(&join, &primary));
     }
 }

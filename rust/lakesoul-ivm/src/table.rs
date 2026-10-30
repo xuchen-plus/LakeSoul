@@ -58,6 +58,119 @@ pub(crate) const MAX_STATE_APPEND_ROWS: usize = 262_144;
 /// whole append in memory.
 pub(crate) const MAX_WRITE_FILE_SIZE: u64 = 64 * 1024 * 1024;
 
+/// Rows one append coalesces before handing a batch to the writer.
+///
+/// A refresh can produce one-row batches: a union over per-file delta
+/// partitions, or a sorted delete/insert stream.  Writing each batch as its
+/// own Vortex block leaves a healthy MV/state with hundreds of thousands of
+/// tiny batches after a single window, and every later key lookup then pays
+/// the block overhead.  Coalescing at the sink keeps the write path's batch
+/// granularity independent of the upstream plan's partitioning.
+pub(crate) const APPEND_COALESCE_ROWS: usize = 8192;
+
+/// Coalesce small refresh batches into writer-sized batches.
+struct BatchCoalescer {
+    schema: SchemaRef,
+    target_rows: usize,
+    pending: Vec<RecordBatch>,
+    rows: usize,
+}
+
+impl BatchCoalescer {
+    fn new(schema: SchemaRef, target_rows: usize) -> Self {
+        Self {
+            schema,
+            target_rows: target_rows.max(1),
+            pending: Vec::new(),
+            rows: 0,
+        }
+    }
+
+    /// Add one batch, returning a coalesced batch once the target is reached.
+    fn push(&mut self, batch: RecordBatch) -> crate::error::Result<Option<RecordBatch>> {
+        if batch.num_rows() == 0 {
+            return Ok(None);
+        }
+        self.rows += batch.num_rows();
+        self.pending.push(batch);
+        if self.rows < self.target_rows {
+            return Ok(None);
+        }
+        self.take().map(Some)
+    }
+
+    /// Flush the remaining rows at end of stream.
+    fn finish(&mut self) -> crate::error::Result<Option<RecordBatch>> {
+        if self.pending.is_empty() {
+            return Ok(None);
+        }
+        self.take().map(Some)
+    }
+
+    fn take(&mut self) -> crate::error::Result<RecordBatch> {
+        let pending = std::mem::take(&mut self.pending);
+        self.rows = 0;
+        match pending.len() {
+            0 => Err(rootcause::report!(
+                "coalesce refresh batches: empty pending"
+            )),
+            1 => Ok(pending.into_iter().next().expect("one pending batch")),
+            _ => concat_batches(&self.schema, &pending)
+                .map_err(|error| rootcause::report!("coalesce refresh batches: {error}")),
+        }
+    }
+}
+
+/// Wrap a refresh output stream with [`BatchCoalescer`].
+///
+/// The stream keeps the input order; only batch boundaries change.
+fn coalesce_batch_stream<S>(
+    stream: S,
+    table: IvmTable,
+    target_rows: usize,
+) -> impl futures::Stream<Item = datafusion::error::Result<RecordBatch>> + Send
+where
+    S: futures::Stream<Item = datafusion::error::Result<RecordBatch>> + Send + Unpin,
+{
+    use futures::StreamExt;
+    let coalescer = BatchCoalescer::new(table.schema.clone(), target_rows);
+    futures::stream::try_unfold(
+        (stream, coalescer, table),
+        |(mut stream, mut coalescer, table)| async move {
+            loop {
+                match stream.next().await {
+                    Some(Ok(batch)) => {
+                        // Cast before concatenating: upstream batches may use
+                        // Utf8View while the table schema stores Utf8.
+                        let batch = table.cast_batch(batch).map_err(|error| {
+                            DataFusionError::Execution(format!(
+                                "coalesce refresh batches: {error:?}"
+                            ))
+                        })?;
+                        let next = coalescer.push(batch).map_err(|error| {
+                            DataFusionError::Execution(format!(
+                                "coalesce refresh batches: {error:?}"
+                            ))
+                        })?;
+                        if let Some(batch) = next {
+                            return Ok(Some((batch, (stream, coalescer, table))));
+                        }
+                    }
+                    Some(Err(error)) => return Err(error),
+                    None => {
+                        let next = coalescer.finish().map_err(|error| {
+                            DataFusionError::Execution(format!(
+                                "coalesce refresh batches: {error:?}"
+                            ))
+                        })?;
+                        return Ok(next.map(|batch| (batch, (stream, coalescer, table))));
+                    }
+                }
+            }
+        },
+    )
+}
+
 /// The in-memory multipart buffer used by the LakeSoul writer.
 pub(crate) const WRITE_MEMORY_BUFFER: usize = 8 * 1024 * 1024;
 
@@ -860,12 +973,17 @@ impl IvmTable {
     pub async fn append_stream<S>(
         &self,
         client: &MetaDataClient,
-        mut stream: S,
+        stream: S,
     ) -> Result<Vec<String>>
     where
         S: futures::Stream<Item = datafusion::error::Result<RecordBatch>> + Send + Unpin,
     {
         use futures::StreamExt;
+        let mut stream = Box::pin(coalesce_batch_stream(
+            stream,
+            self.clone(),
+            APPEND_COALESCE_ROWS,
+        ));
         let mut writer = self.writer().await?;
         let mut rows = 0u64;
         while let Some(batch) = stream.next().await {
@@ -898,7 +1016,7 @@ impl IvmTable {
     pub(crate) async fn append_stream_by_key<S>(
         &self,
         client: &MetaDataClient,
-        mut stream: S,
+        stream: S,
     ) -> Result<Vec<String>>
     where
         S: futures::Stream<Item = datafusion::error::Result<RecordBatch>> + Send + Unpin,
@@ -907,6 +1025,11 @@ impl IvmTable {
         if self.primary_keys.is_empty() {
             return self.append_stream(client, stream).await;
         }
+        let mut stream = Box::pin(coalesce_batch_stream(
+            stream,
+            self.clone(),
+            APPEND_COALESCE_ROWS,
+        ));
         let key_indices = self
             .primary_keys
             .iter()
@@ -985,12 +1108,19 @@ impl IvmTable {
     ) -> Result<Vec<DataFileInfo>> {
         let mut rows = 0u64;
         let mut writer = self.writer().await?;
+        let mut coalescer =
+            BatchCoalescer::new(self.schema.clone(), APPEND_COALESCE_ROWS);
         for batch in batches {
             if batch.num_rows() == 0 {
                 continue;
             }
             let batch = self.cast_batch(batch)?;
             rows += batch.num_rows() as u64;
+            if let Some(batch) = coalescer.push(batch)? {
+                writer.write_record_batch(batch).await?;
+            }
+        }
+        if let Some(batch) = coalescer.finish()? {
             writer.write_record_batch(batch).await?;
         }
         let outputs = writer.flush_and_close().await?;
@@ -2039,4 +2169,63 @@ fn last_key_group_start(
         start -= 1;
     }
     Ok(start)
+}
+
+#[cfg(test)]
+mod coalesce_tests {
+    use super::*;
+    use arrow_array::Int32Array;
+    use arrow_schema::{DataType, Field};
+
+    fn schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, false)]))
+    }
+
+    fn batch(start: i32, rows: usize) -> RecordBatch {
+        let values = (start..start + rows as i32).collect::<Vec<_>>();
+        RecordBatch::try_new(schema(), vec![Arc::new(Int32Array::from(values))])
+            .expect("test batch")
+    }
+
+    #[test]
+    fn coalesces_small_batches_to_target() {
+        let mut coalescer = BatchCoalescer::new(schema(), 4);
+        assert!(coalescer.push(batch(0, 1)).expect("push").is_none());
+        assert!(coalescer.push(batch(1, 1)).expect("push").is_none());
+        let output = coalescer
+            .push(batch(2, 2))
+            .expect("push")
+            .expect("coalesced batch");
+        assert_eq!(output.num_rows(), 4);
+        assert!(coalescer.finish().expect("finish").is_none());
+    }
+
+    #[test]
+    fn flushes_remainder_at_end_of_stream() {
+        let mut coalescer = BatchCoalescer::new(schema(), 8);
+        assert!(coalescer.push(batch(0, 3)).expect("push").is_none());
+        let output = coalescer
+            .finish()
+            .expect("finish")
+            .expect("remaining batch");
+        assert_eq!(output.num_rows(), 3);
+        assert!(coalescer.finish().expect("finish").is_none());
+    }
+
+    #[test]
+    fn preserves_row_order_across_batches() {
+        let mut coalescer = BatchCoalescer::new(schema(), 5);
+        assert!(coalescer.push(batch(0, 2)).expect("push").is_none());
+        assert!(coalescer.push(batch(2, 2)).expect("push").is_none());
+        let output = coalescer
+            .push(batch(4, 2))
+            .expect("push")
+            .expect("coalesced batch");
+        let values = output
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("int32 column");
+        assert_eq!(values.values(), &[0, 1, 2, 3, 4, 5]);
+    }
 }
