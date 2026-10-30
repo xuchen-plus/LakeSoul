@@ -4206,6 +4206,15 @@ impl IvmRuntime {
                 .await?;
             filter_deletes(before, change_column(&view.source))?
         };
+        // `before` feeds the old-side state ops, the affected groups and the
+        // SQL old CTE.  Keep one materialized copy so the keyed before-image
+        // lookup runs once per window.
+        let before_batches = before.clone().collect().await?;
+        let before = if before_batches.is_empty() {
+            before
+        } else {
+            context.read_batches(before_batches)?
+        };
         let delta_clean = filter_deletes(delta.clone(), change_column(&view.source))?;
         let before_keys = project_group_keys_frame(
             &context,
