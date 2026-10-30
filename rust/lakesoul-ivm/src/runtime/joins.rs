@@ -3861,51 +3861,48 @@ impl IvmRuntime {
         if matches!(mode.as_str(), "on" | "1" | "true") {
             return Ok(Some(keys));
         }
-        // Large source/MV lookups are indexed random reads.  Per-step
-        // measurements on the 10M pilot show that a full-state scan only wins
-        // for very small state tables; large 6M-row MVs are 2-5x faster
-        // through the keyed lookup at 50k-235k keys.  Check the state size
-        // before doing any contribution work.
-        let Some(bytes) =
-            groups_by_bucket
-                .iter()
-                .flatten()
-                .try_fold(0u64, |total, group| {
-                    group.files.iter().try_fold(total, |total, file| {
+        // Large source/MV lookups are indexed random reads.  A full-state
+        // scan is only competitive when the state files are compacted (or
+        // the state is very small): an uncompacted 6M-row MV with 80 tiny
+        // files reads as hundreds of thousands of one-row batches and takes
+        // far longer than the keyed lookup.
+        let Some((bytes, files)) = groups_by_bucket.iter().flatten().try_fold(
+            (0u64, 0usize),
+            |(bytes, files), group| {
+                group
+                    .files
+                    .iter()
+                    .try_fold((bytes, files), |(bytes, files), file| {
                         let path = file.strip_prefix("file://")?;
-                        Some(total + std::fs::metadata(path).ok()?.len())
+                        Some((bytes + std::fs::metadata(path).ok()?.len(), files + 1))
                     })
-                })
-        else {
+            },
+        ) else {
             return Ok(None);
         };
         let state_mb = bytes as f64 / 1_000_000.0;
-        if state_mb > 16.0 {
+        let avg_file_mb = state_mb / files.max(1) as f64;
+        let small_state = state_mb <= 16.0;
+        if !small_state && avg_file_mb < 16.0 {
             return Ok(None);
         }
-        let (rows, has_null) = match Self::frame_key_stats(&keys, input_columns).await? {
-            Some(stats) => stats,
-            None => {
-                // Statistics are absent on some derived contributions.  For
-                // a small state it is still worth executing the key frame
-                // once; large states already took the keyed lookup path.
-                let batches = keys.clone().collect().await?;
-                let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
-                let has_null = batches.iter().any(|batch| {
-                    batch.columns().iter().any(|column| column.null_count() > 0)
-                });
-                (rows, has_null)
-            }
+        // Statistics are absent on some derived contributions; executing the
+        // key frame just to count it would double the contribution work, so
+        // keep the keyed lookup in that case.
+        let Some((rows, has_null)) = Self::frame_key_stats(&keys, input_columns).await?
+        else {
+            return Ok(None);
         };
-        if rows < 200_000 || has_null {
+        let min_rows = if small_state { 100_000 } else { 50_000 };
+        if rows < min_rows || has_null {
             return Ok(None);
         }
         let parallel = bucket_count
             .min(super::keyed_plan::max_active_tasks())
             .max(1) as f64;
-        let key_ms = rows as f64 * 0.177 / parallel;
-        let join_ms = state_mb / 180.0 * 1000.0 + 500.0;
-        let applies = key_ms > join_ms * 1.5;
+        let key_ms = rows as f64 * 0.25 / parallel;
+        let join_ms = state_mb / 300.0 * 1000.0 + 500.0;
+        let applies = key_ms > join_ms * 1.2;
         tracing::debug!(
             table = %table.table_name,
             rows,
