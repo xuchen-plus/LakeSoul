@@ -32,6 +32,7 @@ use datafusion::error::{DataFusionError, Result as DataFusionResult};
 use datafusion::logical_expr::utils::split_conjunction;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType, lit};
 use datafusion::physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
+use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
@@ -439,7 +440,7 @@ impl IvmTableProvider {
                 .collect::<Vec<_>>(),
         );
         let refresh_io = observability::current_refresh_io();
-        Ok(Arc::new(IvmStreamExec::new(
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(IvmStreamExec::new(
             self.table.clone(),
             Arc::new(groups),
             Arc::new(filters_per_group),
@@ -450,7 +451,11 @@ impl IvmTableProvider {
             partitions,
             refresh_io,
             file_counts,
-        )))
+        ));
+        // State/MV files can produce tiny batches after merge.  Coalescing at
+        // the scan boundary is cheap and keeps every downstream operator from
+        // looping over one-row batches.
+        Ok(Arc::new(CoalesceBatchesExec::new(plan, 8192)))
     }
 }
 
