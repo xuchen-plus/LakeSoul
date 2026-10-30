@@ -33,6 +33,9 @@ use datafusion::logical_expr::utils::split_conjunction;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType, lit};
 use datafusion::physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
+};
 use datafusion::physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
@@ -479,6 +482,7 @@ struct IvmStreamExec {
     refresh_io: Option<Arc<Mutex<RefreshIo>>>,
     file_counts: Arc<Vec<usize>>,
     gate: Arc<tokio::sync::Semaphore>,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl IvmStreamExec {
@@ -515,6 +519,7 @@ impl IvmStreamExec {
             gate: Arc::new(tokio::sync::Semaphore::new(
                 crate::runtime::keyed_plan::max_active_tasks(),
             )),
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 }
@@ -568,6 +573,10 @@ impl ExecutionPlan for IvmStreamExec {
 
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -647,17 +656,21 @@ impl ExecutionPlan for IvmStreamExec {
             })
         });
         let input = builder.build();
-        let Some(refresh_io) = &self.refresh_io else {
-            return Ok(input);
+        let input: SendableRecordBatchStream = match &self.refresh_io {
+            None => input,
+            Some(refresh_io) => {
+                let files = self.file_counts.get(partition).copied().unwrap_or(0) as u64;
+                observability::add_files_read_shared(refresh_io, files);
+                let schema = input.schema();
+                Box::pin(RefreshCountingStream {
+                    input,
+                    schema,
+                    refresh_io: refresh_io.clone(),
+                })
+            }
         };
-        let files = self.file_counts.get(partition).copied().unwrap_or(0) as u64;
-        observability::add_files_read_shared(refresh_io, files);
-        let schema = input.schema();
-        Ok(Box::pin(RefreshCountingStream {
-            input,
-            schema,
-            refresh_io: refresh_io.clone(),
-        }))
+        let baseline = BaselineMetrics::new(&self.metrics, partition);
+        Ok(Box::pin(MetricStream { input, baseline }))
     }
 }
 
@@ -691,5 +704,29 @@ impl Stream for RefreshCountingStream {
 impl datafusion::physical_plan::RecordBatchStream for RefreshCountingStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+}
+
+/// Records poll time and output rows for one provider scan.
+struct MetricStream {
+    input: SendableRecordBatchStream,
+    baseline: BaselineMetrics,
+}
+
+impl Stream for MetricStream {
+    type Item = DataFusionResult<arrow_array::RecordBatch>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let timer = this.baseline.elapsed_compute().timer();
+        let poll = this.input.as_mut().poll_next(cx);
+        timer.done();
+        this.baseline.record_poll(poll)
+    }
+}
+
+impl datafusion::physical_plan::RecordBatchStream for MetricStream {
+    fn schema(&self) -> SchemaRef {
+        self.input.schema()
     }
 }

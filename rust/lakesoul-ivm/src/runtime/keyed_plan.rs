@@ -36,6 +36,7 @@ use datafusion::physical_expr::expressions::Column as PhysicalColumn;
 use datafusion::physical_expr::{
     EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalSortExpr,
 };
+use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -1642,9 +1643,14 @@ impl IvmHashJoinTable {
                 groups.clone(),
             );
             let plan = provider.scan(session, None, &[], None).await?;
-            state_children.push(
-                Arc::new(CoalescePartitionsExec::new(plan)) as Arc<dyn ExecutionPlan>
-            );
+            let plan: Arc<dyn ExecutionPlan> =
+                Arc::new(CoalescePartitionsExec::new(plan));
+            // State files can produce very small batches (the 10M step20
+            // state has a median of one row per batch after merge).  Coalesce
+            // before the hash build; 768k tiny batches otherwise dominate.
+            state_children
+                .push(Arc::new(CoalesceBatchesExec::new(plan, 8192))
+                    as Arc<dyn ExecutionPlan>);
         }
         let state_plan: Arc<dyn ExecutionPlan> = Arc::new(BucketPartitionedExec::new(
             state_children,
@@ -1824,6 +1830,41 @@ pub(crate) async fn hash_join_source_state(
         groups_by_bucket,
     );
     context.read_table(Arc::new(table))
+}
+
+/// Build the raw source hash-join plan for a benchmark.  The returned plan is
+/// not hidden from the optimizer, so its operator metrics can be inspected.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub async fn build_source_hash_join_plan(
+    context: &SessionContext,
+    state: &IvmTable,
+    client: &lakesoul_metadata::MetaDataClient,
+    contribution: DataFrame,
+    input_columns: &[String],
+    table_columns: &[String],
+    route_columns: Option<Vec<String>>,
+    multi_match: bool,
+    groups_by_bucket: Vec<Vec<PartitionFiles>>,
+) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+    let join_type = if multi_match {
+        datafusion::common::JoinType::Inner
+    } else {
+        datafusion::common::JoinType::Right
+    };
+    let table = IvmHashJoinTable::new(
+        state.clone(),
+        client.clone(),
+        contribution,
+        input_columns.to_vec(),
+        table_columns.to_vec(),
+        route_columns,
+        join_type,
+        NullEquality::NullEqualsNothing,
+        groups_by_bucket,
+    );
+    let session = context.state();
+    table.build_plan(&session).await
 }
 
 /// A one-partition plan that hides its inner plan from physical optimizers.

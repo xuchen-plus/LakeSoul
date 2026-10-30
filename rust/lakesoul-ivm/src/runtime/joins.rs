@@ -4562,6 +4562,64 @@ impl IvmRuntime {
         .await
     }
 
+    /// Build the raw source hash-join plan for operator-level profiling.
+    #[doc(hidden)]
+    pub async fn debug_source_hash_join_plan(
+        &self,
+        context: &SessionContext,
+        table: &IvmTable,
+        contribution: DataFrame,
+        input_columns: &[String],
+        table_columns: &[String],
+        multi_match: bool,
+    ) -> Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
+        use super::keyed_plan::groups_by_bucket;
+
+        let bucket_count = table
+            .hash_bucket_num
+            .parse::<usize>()
+            .ok()
+            .filter(|count| *count > 1)
+            .unwrap_or(1);
+        let bucket_columns = table.effective_bucket_columns();
+        let route_columns = if bucket_count > 1
+            && !bucket_columns.is_empty()
+            && bucket_columns
+                .iter()
+                .all(|column| table_columns.iter().any(|key| key == column))
+        {
+            let mut columns = Vec::with_capacity(bucket_columns.len());
+            for bucket_column in bucket_columns {
+                let position = table_columns
+                    .iter()
+                    .position(|key| key == bucket_column)
+                    .ok_or_else(|| {
+                        report!("bucket column {bucket_column} is not a lookup key")
+                    })?;
+                columns.push(input_columns[position].clone());
+            }
+            Some(columns)
+        } else {
+            None
+        };
+        let bucket_count = route_columns.as_ref().map_or(1, |_| bucket_count);
+        let groups = table.current_groups(&self.client).await?;
+        let groups = groups_by_bucket(groups, bucket_count);
+        super::keyed_plan::build_source_hash_join_plan(
+            context,
+            table,
+            &self.client,
+            contribution,
+            input_columns,
+            table_columns,
+            route_columns,
+            multi_match,
+            groups,
+        )
+        .await
+        .map_err(|error| report!("{error}"))
+    }
+
     /// Like [`Self::lookup_source_by_join_keys`], but only the given range
     /// partitions are listed and read.  The caller must have derived the
     /// restriction from the window (or another complete set of affected
