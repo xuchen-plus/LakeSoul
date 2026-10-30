@@ -3628,7 +3628,17 @@ impl IvmRuntime {
         let before = self
             .lookup_source_before_by_pks(&context, &view.source, &window, contribution)
             .await?;
+        // `before` feeds the rank update and both affected-group frames; a
+        // lazy lookup would re-run the same 400k-key probe for each use.
+        // Keep only the rank columns and materialize the rows once.
+        let before = project_frame(before, &rank_columns)?;
         let before = filter_deletes(before, change_column(&view.source))?;
+        let before_batches = before.clone().collect().await?;
+        let before = if before_batches.is_empty() {
+            before
+        } else {
+            context.read_batches(before_batches)?
+        };
         if let Some(rank) = &rank_state {
             let change = change_column(&view.source).unwrap_or(IVM_ROW_KINDS_COLUMN);
             commit_ids.extend(
@@ -3729,6 +3739,20 @@ impl IvmRuntime {
             }
         };
         context.register_table("delta", delta.clone().into_view())?;
+        // The SQL below scans `mv` twice (`already` and `active`).  A lazy
+        // keyed lookup would run the same 400k-key probe for each reference;
+        // materialize the affected groups once and register those batches.
+        // A global top-k reads the whole state, so keep it streaming.
+        let mv = if view.group_keys.is_empty() {
+            mv
+        } else {
+            let mv_batches = mv.clone().collect().await?;
+            if mv_batches.is_empty() {
+                mv
+            } else {
+                context.read_batches(mv_batches)?
+            }
+        };
         context.register_table("mv", mv.clone().into_view())?;
         let src = if let Some(rank) = &rank_state {
             let affected = if view.group_keys.is_empty() {
@@ -3855,17 +3879,36 @@ impl IvmRuntime {
         context.register_table("src", src.into_view())?;
         let frame = context.sql(&top_k_refresh_sql(view, epoch)).await?;
         phase_done!("sql_plan");
-        let state_frame = frame.clone().execute_stream().await?;
-        let (mv_ids, state_ids) = futures::future::try_join(
-            view.mv
-                .append_stream(&self.client, frame.execute_stream().await?),
-            async {
-                let ids = state.append_stream(&self.client, state_frame).await?;
-                self.checkpoint_epoch_states(&record).await?;
-                Ok::<_, rootcause::Report>(ids)
-            },
-        )
-        .await?;
+        let (mv_ids, state_ids) = if view.group_keys.is_empty() {
+            // A global top-k can rewrite the whole state; keep the streaming
+            // path instead of collecting the full result in memory.
+            let state_frame = frame.clone().execute_stream().await?;
+            futures::future::try_join(
+                view.mv
+                    .append_stream(&self.client, frame.execute_stream().await?),
+                async {
+                    let ids = state.append_stream(&self.client, state_frame).await?;
+                    self.checkpoint_epoch_states(&record).await?;
+                    Ok::<_, rootcause::Report>(ids)
+                },
+            )
+            .await?
+        } else {
+            // Execute the refresh SQL once and feed both the MV and its mirror
+            // state from the same batches.  Two independent streams re-ran
+            // every keyed lookup inside the plan (including before-image).
+            let batches = frame.collect().await?;
+            phase_done!("sql_collect");
+            futures::future::try_join(
+                view.mv.append_batches(&self.client, batches.clone()),
+                async {
+                    let ids = state.append_batches(&self.client, batches).await?;
+                    self.checkpoint_epoch_states(&record).await?;
+                    Ok::<_, rootcause::Report>(ids)
+                },
+            )
+            .await?
+        };
         commit_ids.extend(mv_ids);
         commit_ids.extend(state_ids);
         phase_done!("sql_execute_and_append");
