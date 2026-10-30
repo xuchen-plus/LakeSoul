@@ -3864,7 +3864,8 @@ impl IvmRuntime {
         // Large source/MV lookups are indexed random reads.  A full-state
         // scan is only competitive when the state files are compacted (or
         // the state is very small): an uncompacted 6M-row MV with 80 tiny
-        // files reads as hundreds of thousands of one-row batches and takes
+        // files (a few MB each) reads as hundreds of thousands of one-row
+        // batches and takes
         // far longer than the keyed lookup.
         let Some((bytes, files)) = groups_by_bucket.iter().flatten().try_fold(
             (0u64, 0usize),
@@ -3883,7 +3884,7 @@ impl IvmRuntime {
         let state_mb = bytes as f64 / 1_000_000.0;
         let avg_file_mb = state_mb / files.max(1) as f64;
         let small_state = state_mb <= 16.0;
-        if !small_state && avg_file_mb < 16.0 {
+        if !small_state && avg_file_mb < 6.0 {
             return Ok(None);
         }
         // Statistics are absent on some derived contributions; executing the
