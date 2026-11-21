@@ -78,6 +78,41 @@ GROUP BY user_id;
   the `pinned` flag; an untagged snapshot may be reclaimed once it is old
   enough.
 
+## Session-wide default
+
+A connection can pin every local table scan with one setting:
+
+```sql
+SET lakesoul.read.time_travel = '2026-11-20T10:00:00+08:00';
+SELECT * FROM events;          -- as of that instant
+SELECT * FROM lakesoul_table_scan('events', 'timestamp', '2026-11-21T00:00:00Z');  -- explicit pin wins
+
+RESET lakesoul.read.time_travel;   -- or SET … = DEFAULT
+```
+
+- **No snapshot or tag is needed.** Each partition resolves to its latest
+  version committed at or before the instant, exactly like the `timestamp`
+  mode of `lakesoul_table_scan`.
+- If a table has **no** version at or before the instant, the scan fails with
+  `table "…" has no version committed at or before …` instead of returning
+  zero rows. Partitions created after the instant are simply omitted.
+- A table that does have older versions but whose query filter matches nothing
+  is an ordinary empty result, not an error.
+- Writes remain available: `INSERT … SELECT` reads the pinned rows and writes
+  them elsewhere, which is the main reason the setting is not read-only. An
+  `UPDATE`/`DELETE` target still plans against current rows; use
+  `lakesoul_table_scan` for an explicit historical source.
+- An explicit `lakesoul_table_scan` pin takes precedence over the session
+  default.
+- Only local LakeSoul tables are pinned; federated foreign tables have no time
+  travel and keep reading their current state.
+- The value must be an RFC3339 string with an explicit offset; `SHOW` reports
+  it normalized to UTC. `SET LOCAL` is refused (the setting is
+  connection-local and not reverted by `COMMIT`/`ROLLBACK`). `RESET ALL` and
+  `DISCARD ALL` clear it.
+- The setting is per connection, so a pool must set it on the connections that
+  need it.
+
 ## Managing snapshots and tags
 
 A **snapshot** is an immutable, table-wide freeze of the partition versions
